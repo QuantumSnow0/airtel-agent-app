@@ -109,15 +109,13 @@ export default function RootLayout() {
       const result = await Promise.race([sessionPromise, timeoutPromise]);
       const session = (result as any)?.data?.session;
 
-      // If we have a valid session, try to redirect after router is ready
+      // If we have a valid session, try to redirect immediately
       if (session?.user) {
-        // Wait a bit longer for router to be fully initialized before redirecting
-        setTimeout(() => {
-          handleAuthChange(session).catch((error) => {
-            console.error("Error in handleAuthChange:", error);
-            // Ignore errors - individual screens will handle their own auth checks
-          });
-        }, 800); // Wait longer to ensure router is ready
+        // Redirect immediately - index.tsx will also check and redirect
+        handleAuthChange(session).catch((error) => {
+          console.error("Error in handleAuthChange:", error);
+          // Ignore errors - individual screens will handle their own auth checks
+        });
       }
       // If no session, just return - welcome screen will show naturally
     } catch (error) {
@@ -160,21 +158,17 @@ export default function RootLayout() {
         ])) as any;
 
         if (agentError || !agentData) {
-          // Agent record doesn't exist or query timed out - redirect to pending approval
-          router.replace("/pending-approval" as any);
+          // Agent record doesn't exist or query timed out - redirect to dashboard (will show pending status)
+          router.replace("/dashboard" as any);
           return;
         }
 
-        // Navigate based on approval status
-        if (agentData.status === "approved") {
-          router.replace("/dashboard" as any);
-        } else {
-          router.replace("/pending-approval" as any);
-        }
+        // Always navigate to dashboard (dashboard handles pending/approved status display)
+        router.replace("/dashboard" as any);
       } catch (agentError) {
         console.error("Error checking agent status:", agentError);
-        // On error, redirect to pending approval
-        router.replace("/pending-approval" as any);
+        // On error, redirect to dashboard (will show pending status)
+        router.replace("/dashboard" as any);
       }
     } catch (error) {
       console.error("Error handling auth change:", error);

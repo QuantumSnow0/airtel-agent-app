@@ -1,6 +1,8 @@
-import { Text, View, StyleSheet, TouchableOpacity, Image } from "react-native";
+import { Text, View, StyleSheet, TouchableOpacity, Image, ActivityIndicator } from "react-native";
 import { useRouter } from "expo-router";
 import { useFonts } from "expo-font";
+import { useEffect, useState } from "react";
+import { supabase } from "../lib/supabase";
 import {
   Poppins_600SemiBold,
   Poppins_700Bold,
@@ -9,6 +11,7 @@ import { Inter_400Regular, Inter_500Medium } from "@expo-google-fonts/inter";
 
 export default function WelcomeScreen() {
   const router = useRouter();
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
 
   const [fontsLoaded] = useFonts({
     Poppins_600SemiBold,
@@ -17,8 +20,33 @@ export default function WelcomeScreen() {
     Inter_500Medium,
   });
 
-  if (!fontsLoaded) {
-    return null;
+  useEffect(() => {
+    // Immediately check if user is already logged in
+    const checkAuth = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user) {
+          // User is logged in - redirect to dashboard immediately
+          router.replace("/dashboard" as any);
+          return;
+        }
+      } catch (error) {
+        console.error("Error checking auth:", error);
+      } finally {
+        setIsCheckingAuth(false);
+      }
+    };
+
+    checkAuth();
+  }, [router]);
+
+  // Show loading while checking auth or loading fonts
+  if (isCheckingAuth || !fontsLoaded) {
+    return (
+      <View style={styles.container}>
+        <ActivityIndicator size="large" color="#0066CC" />
+      </View>
+    );
   }
 
   const handleGetStarted = () => {
@@ -86,6 +114,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingTop: 60,
     paddingBottom: 40,
+    justifyContent: "center",
+    alignItems: "center",
   },
   contentWrapper: {
     flex: 1,

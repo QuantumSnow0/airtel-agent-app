@@ -170,20 +170,14 @@ export default function LoginScreen() {
 
       if (agentError) {
         console.error("Error checking agent status:", agentError);
-        // If agent record doesn't exist, treat as pending
-        router.replace("/pending-approval" as any);
+        // If agent record doesn't exist, treat as pending - go to dashboard (will show pending status)
+        router.replace("/dashboard" as any);
         setIsLoading(false);
         return;
       }
 
-      // Navigate based on approval status
-      if (agentData?.status === "approved") {
-        // Agent is approved - go to dashboard
-        router.replace("/dashboard" as any);
-      } else {
-        // Agent is pending or rejected - show pending approval screen
-        router.replace("/pending-approval" as any);
-      }
+      // Always navigate to dashboard (dashboard handles pending/approved status display)
+      router.replace("/dashboard" as any);
     } catch (err: any) {
       console.error("Login error:", err);
       setError(err.message || "Failed to sign in. Please try again.");

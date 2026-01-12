@@ -1,60 +1,139 @@
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Modal } from "react-native";
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  Alert,
+  ActivityIndicator,
+  TouchableOpacity,
+  Animated,
+} from "react-native";
 import { useRouter } from "expo-router";
 import { useFonts } from "expo-font";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import {
   Poppins_600SemiBold,
   Poppins_700Bold,
 } from "@expo-google-fonts/poppins";
-import { Inter_400Regular, Inter_500Medium } from "@expo-google-fonts/inter";
+import {
+  Inter_400Regular,
+  Inter_500Medium,
+  Inter_600SemiBold,
+} from "@expo-google-fonts/inter";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../lib/supabase";
+import {
+  getCachedAgentData,
+  saveAgentDataToCache,
+  clearAgentDataCache,
+  CachedAgentData,
+} from "../lib/cache/agentCache";
+
+// Helper function to get time-based greeting
+const getTimeBasedGreeting = (): string => {
+  const hour = new Date().getHours();
+  if (hour < 12) {
+    return "Good morning 👋,";
+  } else if (hour < 18) {
+    return "Good afternoon 👋,";
+  } else {
+    return "Good evening 👋,";
+  }
+};
+
+// Helper function to get first letter of name
+const getInitial = (name?: string, email?: string): string => {
+  if (name && name.trim().length > 0) {
+    return name.trim().charAt(0).toUpperCase();
+  }
+  if (email && email.trim().length > 0) {
+    return email.trim().charAt(0).toUpperCase();
+  }
+  return "?";
+};
 
 export default function DashboardScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [isLoading, setIsLoading] = useState(true);
   const [user, setUser] = useState<any>(null);
-  const [agentData, setAgentData] = useState<any>(null);
-  const [isLoggingOut, setIsLoggingOut] = useState(false);
-  const [showLogoutModal, setShowLogoutModal] = useState(false);
+  const [agentData, setAgentData] = useState<CachedAgentData | null>(null);
+  const [greeting, setGreeting] = useState("Good morning,");
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
+  const [balance, setBalance] = useState(0); // Agent commission balance
+  const [totalRegistered, setTotalRegistered] = useState(0);
+  const [totalInstalled, setTotalInstalled] = useState(0);
+  const [recentRegistrations, setRecentRegistrations] = useState<any[]>([]);
+  const [isLoadingRegistrations, setIsLoadingRegistrations] = useState(false);
+  const spinValue = useRef(new Animated.Value(0)).current;
 
   const [fontsLoaded] = useFonts({
     Poppins_600SemiBold,
     Poppins_700Bold,
     Inter_400Regular,
     Inter_500Medium,
+    Inter_600SemiBold,
   });
 
   useEffect(() => {
+    setGreeting(getTimeBasedGreeting());
     loadUserData();
-    
+
     // Listen for auth state changes (logout, etc.)
-    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_OUT' || !session) {
-        router.replace("/" as any);
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        if (event === "SIGNED_OUT" || !session) {
+          // Clear cache on logout
+          await clearAgentDataCache();
+          router.replace("/" as any);
+        }
       }
-    });
+    );
 
     return () => {
       authListener.subscription.unsubscribe();
     };
   }, []);
 
+  // Animate hourglass rotation when pending
+  useEffect(() => {
+    const isApproved = agentData?.status === "approved";
+    if (!isApproved && agentData !== null) {
+      // Start rotation animation for pending status
+      const rotateAnimation = Animated.loop(
+        Animated.timing(spinValue, {
+          toValue: 1,
+          duration: 2000,
+          useNativeDriver: true,
+        })
+      );
+      rotateAnimation.start();
+      return () => rotateAnimation.stop();
+    } else {
+      // Reset animation when approved
+      spinValue.setValue(0);
+    }
+  }, [agentData?.status]);
+
   const loadUserData = async () => {
     setIsLoading(true);
     try {
       // Get current user
-      const { data: { user: currentUser }, error: userError } = await supabase.auth.getUser();
-      
+      const {
+        data: { user: currentUser },
+        error: userError,
+      } = await supabase.auth.getUser();
+
       if (userError || !currentUser) {
-        // No user - redirect to login
+        // No user - clear cache and redirect to login
+        await clearAgentDataCache();
         router.replace("/login" as any);
         return;
       }
 
       // Check if email is verified
       if (!currentUser.email_confirmed_at) {
+        await clearAgentDataCache();
         Alert.alert(
           "Email Not Verified",
           "Please verify your email address first.",
@@ -70,7 +149,16 @@ export default function DashboardScreen() {
 
       setUser(currentUser);
 
-      // Get agent data
+      // Try to load cached agent data first (for fast initial display)
+      const cachedAgentData = await getCachedAgentData();
+      let hasCachedData = false;
+      if (cachedAgentData) {
+        setAgentData(cachedAgentData);
+        setIsLoading(false); // Show cached data immediately
+        hasCachedData = true;
+      }
+
+      // Fetch fresh agent data from database (background fetch)
       const { data: agent, error: agentError } = await supabase
         .from("agents")
         .select("*")
@@ -80,47 +168,83 @@ export default function DashboardScreen() {
       if (agentError) {
         console.error("Error loading agent data:", agentError);
         // Agent record doesn't exist - treat as pending
-        router.replace("/pending-approval" as any);
-        return;
+        // Clear cache and set agentData to null
+        await clearAgentDataCache();
+        setAgentData(null);
+      } else {
+        // Save fresh data to cache
+        await saveAgentDataToCache(agent);
+        setAgentData(agent);
       }
 
-      setAgentData(agent);
-
-      // Check if agent is approved
-      if (agent.status !== "approved") {
-        // Not approved - redirect to pending approval
-        router.replace("/pending-approval" as any);
-        return;
+      // Load customer registrations data
+      if (currentUser) {
+        await loadCustomerData(currentUser.id);
       }
     } catch (error: any) {
       console.error("Error loading user data:", error);
-      Alert.alert("Error", "Failed to load user data. Please try again.");
+      // Don't show error alert if we have cached data (better UX)
+      const cachedAgentData = await getCachedAgentData();
+      if (!cachedAgentData) {
+        Alert.alert("Error", "Failed to load user data. Please try again.");
+      }
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleLogout = () => {
-    setShowLogoutModal(true);
+  // Load customer registration data
+  const loadCustomerData = async (agentId: string) => {
+    try {
+      setIsLoadingRegistrations(true);
+
+      // Fetch customer registrations
+      const { data: registrations, error: regError } = await supabase
+        .from("customer_registrations")
+        .select("id, customer_name, status, created_at")
+        .eq("agent_id", agentId)
+        .order("created_at", { ascending: false })
+        .limit(10);
+
+      if (regError) {
+        console.error("Error loading registrations:", regError);
+      } else {
+        setRecentRegistrations(registrations || []);
+      }
+
+      // Calculate stats
+      const { count: totalRegistered, error: countError } = await supabase
+        .from("customer_registrations")
+        .select("*", { count: "exact", head: true })
+        .eq("agent_id", agentId);
+
+      if (!countError && totalRegistered !== null) {
+        setTotalRegistered(totalRegistered);
+      }
+
+      const { count: totalInstalled, error: installedError } = await supabase
+        .from("customer_registrations")
+        .select("*", { count: "exact", head: true })
+        .eq("agent_id", agentId)
+        .eq("status", "installed");
+
+      if (!installedError && totalInstalled !== null) {
+        setTotalInstalled(totalInstalled);
+      }
+
+      // TODO: Calculate balance from commissions
+      // For now, balance is set to 0
+      setBalance(0);
+    } catch (error) {
+      console.error("Error loading customer data:", error);
+    } finally {
+      setIsLoadingRegistrations(false);
+    }
   };
 
-  const confirmLogout = async () => {
-    setIsLoggingOut(true);
-    try {
-      const { error } = await supabase.auth.signOut();
-      if (error) {
-        Alert.alert("Error", error.message || "Failed to log out.");
-        setIsLoggingOut(false);
-        setShowLogoutModal(false);
-        return;
-      }
-      router.replace("/" as any);
-    } catch (error: any) {
-      console.error("Logout error:", error);
-      Alert.alert("Error", "Failed to log out. Please try again.");
-      setIsLoggingOut(false);
-      setShowLogoutModal(false);
-    }
+  const handleProfilePress = () => {
+    // Profile/settings logic - to be implemented later
+    console.log("Profile button pressed");
   };
 
   if (!fontsLoaded) {
@@ -136,6 +260,16 @@ export default function DashboardScreen() {
     );
   }
 
+  const isApproved = agentData?.status === "approved";
+  const name = agentData?.name || user?.email || "";
+  const initial = getInitial(agentData?.name, user?.email);
+
+  // Interpolate rotation for hourglass animation
+  const spin = spinValue.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["0deg", "360deg"],
+  });
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <ScrollView
@@ -144,114 +278,187 @@ export default function DashboardScreen() {
       >
         {/* Header */}
         <View style={styles.header}>
-          <View>
-            <Text style={styles.greeting}>Welcome back!</Text>
-            <Text style={styles.name}>{agentData?.name || user?.email}</Text>
-          </View>
+          {/* Left: Profile Icon Button */}
           <TouchableOpacity
-            style={styles.logoutButton}
-            onPress={handleLogout}
-            disabled={isLoggingOut}
+            style={styles.profileButton}
+            onPress={handleProfilePress}
             activeOpacity={0.7}
           >
-            {isLoggingOut ? (
-              <ActivityIndicator size="small" color="#333333" />
-            ) : (
-              <Text style={styles.logoutButtonText}>Logout</Text>
-            )}
-          </TouchableOpacity>
-        </View>
-
-        {/* Agent Info Card */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Agent Information</Text>
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Email:</Text>
-            <Text style={styles.infoValue}>{agentData?.email || user?.email}</Text>
-          </View>
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Airtel Phone:</Text>
-            <Text style={styles.infoValue}>{agentData?.airtel_phone || "N/A"}</Text>
-          </View>
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Town:</Text>
-            <Text style={styles.infoValue}>{agentData?.town || "N/A"}</Text>
-          </View>
-          <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Area:</Text>
-            <Text style={styles.infoValue}>{agentData?.area || "N/A"}</Text>
-          </View>
-          <View style={[styles.statusBadge, styles.statusApproved]}>
-            <Text style={styles.statusText}>Status: Approved ✓</Text>
-          </View>
-        </View>
-
-        {/* Dashboard Content - Placeholder */}
-        <View style={styles.contentPlaceholder}>
-          <Text style={styles.placeholderText}>Dashboard</Text>
-          <Text style={styles.placeholderSubtext}>
-            Customer registration and other features will be available here.
-          </Text>
-        </View>
-      </ScrollView>
-
-      {/* Logout Confirmation Modal */}
-      <Modal
-        visible={showLogoutModal}
-        transparent={true}
-        animationType="fade"
-        onRequestClose={() => !isLoggingOut && setShowLogoutModal(false)}
-      >
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => !isLoggingOut && setShowLogoutModal(false)}
-        >
-          <TouchableOpacity
-            activeOpacity={1}
-            onPress={(e) => e.stopPropagation()}
-            style={styles.modalContent}
-          >
-            {/* Modal Icon */}
-            <View style={styles.modalIconContainer}>
-              <Text style={styles.modalIcon}>🚪</Text>
-            </View>
-
-            {/* Modal Title */}
-            <Text style={styles.modalTitle}>Logout</Text>
-
-            {/* Modal Message */}
-            <Text style={styles.modalMessage}>
-              Are you sure you want to log out? You'll need to sign in again to access your account.
-            </Text>
-
-            {/* Modal Buttons */}
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.modalButtonCancel]}
-                onPress={() => setShowLogoutModal(false)}
-                disabled={isLoggingOut}
-                activeOpacity={0.7}
+            <View style={styles.profileIconContainer}>
+              <Text style={styles.profileInitial}>{initial}</Text>
+              {/* Status Badge */}
+              <View
+                style={[
+                  styles.statusBadge,
+                  isApproved && styles.statusBadgeApproved,
+                ]}
               >
-                <Text style={styles.modalButtonCancelText}>Cancel</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.modalButton, styles.modalButtonConfirm]}
-                onPress={confirmLogout}
-                disabled={isLoggingOut}
-                activeOpacity={0.8}
-              >
-                {isLoggingOut ? (
-                  <ActivityIndicator color="#FFFFFF" size="small" />
+                {isApproved ? (
+                  <Text style={styles.statusBadgeIcon}>✓</Text>
                 ) : (
-                  <Text style={styles.modalButtonConfirmText}>Logout</Text>
+                  <Animated.Text
+                    style={[
+                      styles.statusBadgeIcon,
+                      { transform: [{ rotate: spin }] },
+                    ]}
+                  >
+                    ⏳
+                  </Animated.Text>
                 )}
-              </TouchableOpacity>
+              </View>
             </View>
           </TouchableOpacity>
+
+          {/* Left: Greeting and Name */}
+          <View style={styles.greetingContainer}>
+            <Text style={styles.greeting}>{greeting}</Text>
+            <Text style={styles.name}>{name}</Text>
+          </View>
+
+          {/* Right: Notification Icon Button */}
+          <TouchableOpacity
+            style={styles.notificationButton}
+            onPress={() => {
+              // Notification logic - to be implemented later
+              console.log("Notification button pressed");
+            }}
+            activeOpacity={0.7}
+          >
+            <View style={styles.notificationIconContainer}>
+              <Text style={styles.notificationIcon}>🔔</Text>
+              {/* Unread Notification Badge */}
+              {unreadNotifications > 0 && (
+                <View style={styles.notificationBadge}>
+                  <Text style={styles.notificationBadgeText}>
+                    {unreadNotifications > 99 ? "99+" : unreadNotifications}
+                  </Text>
+                </View>
+              )}
+            </View>
+          </TouchableOpacity>
+        </View>
+
+        {/* Divider */}
+        <View style={styles.divider} />
+
+        {/* Balance Card */}
+        <View style={styles.balanceCard}>
+          <View style={styles.balanceContent}>
+            <View style={styles.balanceLeft}>
+              <Text style={styles.balanceLabel}>Available Balance</Text>
+              <Text style={styles.balanceAmount}>
+                KSh {balance.toLocaleString()}
+              </Text>
+            </View>
+            <View style={styles.balanceIconContainer}>
+              <Text style={styles.balanceIcon}>💰</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* Stats Cards */}
+        <View style={styles.statsContainer}>
+          <View style={styles.statCard}>
+            <Text style={styles.statLabel}>Total Registered</Text>
+            <Text style={styles.statValue}>{totalRegistered}</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Text style={styles.statLabel}>Total Installed</Text>
+            <Text style={styles.statValue}>{totalInstalled}</Text>
+          </View>
+        </View>
+
+        {/* Register New Customer Button */}
+        <TouchableOpacity
+          style={styles.registerButton}
+          onPress={() => {
+            // Navigate to customer registration form
+            router.push("/register-customer" as any);
+          }}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.registerButtonText}>+ Register New Customer</Text>
         </TouchableOpacity>
-      </Modal>
+
+        {/* Recent Registrations Section */}
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Recent Registrations</Text>
+          {recentRegistrations.length > 0 && (
+            <TouchableOpacity
+              onPress={() => {
+                // Navigate to all registrations view
+                console.log("View all registrations");
+              }}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.viewAllText}>View All</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {/* Recent Registrations List */}
+        {isLoadingRegistrations ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="small" color="#0066CC" />
+          </View>
+        ) : recentRegistrations.length > 0 ? (
+          <View style={styles.registrationsList}>
+            {recentRegistrations.slice(0, 5).map((registration, index) => (
+              <TouchableOpacity
+                key={registration.id || index}
+                style={styles.registrationCard}
+                activeOpacity={0.7}
+                onPress={() => {
+                  // Navigate to registration details
+                  console.log("View registration details");
+                }}
+              >
+                <View style={styles.registrationContent}>
+                  <View style={styles.registrationLeft}>
+                    <Text style={styles.registrationName}>
+                      {registration.customer_name || "Customer"}
+                    </Text>
+                    <Text style={styles.registrationDate}>
+                      {registration.created_at
+                        ? new Date(registration.created_at).toLocaleDateString()
+                        : "N/A"}
+                    </Text>
+                  </View>
+                  <View
+                    style={[
+                      styles.registrationStatus,
+                      registration.status === "installed" &&
+                        styles.registrationStatusInstalled,
+                      registration.status === "approved" &&
+                        styles.registrationStatusApproved,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.registrationStatusText,
+                        registration.status === "installed" &&
+                          styles.registrationStatusTextInstalled,
+                        registration.status === "approved" &&
+                          styles.registrationStatusTextApproved,
+                      ]}
+                    >
+                      {registration.status || "pending"}
+                    </Text>
+                  </View>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </View>
+        ) : (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyStateIcon}>📋</Text>
+            <Text style={styles.emptyStateText}>No registrations yet</Text>
+            <Text style={styles.emptyStateSubtext}>
+              Start by registering your first customer
+            </Text>
+          </View>
+        )}
+      </ScrollView>
     </View>
   );
 }
@@ -259,7 +466,7 @@ export default function DashboardScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#F8F9FA",
+    backgroundColor: "#F5F7FA",
   },
   loadingContainer: {
     justifyContent: "center",
@@ -272,7 +479,7 @@ const styles = StyleSheet.create({
     color: "#666666",
   },
   scrollContent: {
-    paddingHorizontal: 24,
+    paddingHorizontal: 10,
     paddingTop: 20,
     paddingBottom: 40,
   },
@@ -280,203 +487,104 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 24,
+    marginBottom: 16,
   },
-  greeting: {
-    fontSize: 16,
-    fontFamily: "Inter_400Regular",
-    color: "#666666",
-    marginBottom: 4,
-    letterSpacing: 0.2,
+  divider: {
+    height: 1,
+    backgroundColor: "#E0E0E0",
+    marginBottom: 20,
   },
-  name: {
-    fontSize: 24,
-    fontFamily: "Poppins_600SemiBold",
-    color: "#333333",
-    letterSpacing: 0.3,
-  },
-  logoutButton: {
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#E0E0E0",
-    backgroundColor: "#FFFFFF",
-    minWidth: 80,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  logoutButtonText: {
-    fontSize: 14,
-    fontFamily: "Inter_500Medium",
-    color: "#333333",
-    letterSpacing: 0.2,
-  },
-  card: {
+  balanceCard: {
     backgroundColor: "#FFFFFF",
     borderRadius: 16,
-    padding: 20,
-    marginBottom: 24,
+    padding: 16,
+    marginBottom: 20,
     shadowColor: "#000000",
     shadowOffset: {
       width: 0,
       height: 2,
     },
-    shadowOpacity: 0.1,
+    shadowOpacity: 0.08,
     shadowRadius: 8,
-    elevation: 4,
+    elevation: 2,
+    borderWidth: 1,
+    borderColor: "#F0F0F0",
   },
-  cardTitle: {
-    fontSize: 18,
-    fontFamily: "Poppins_600SemiBold",
-    color: "#333333",
-    marginBottom: 16,
-    letterSpacing: 0.3,
-  },
-  infoRow: {
+  balanceContent: {
     flexDirection: "row",
     justifyContent: "space-between",
-    marginBottom: 12,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: "#F0F0F0",
-  },
-  infoLabel: {
-    fontSize: 14,
-    fontFamily: "Inter_400Regular",
-    color: "#666666",
-    letterSpacing: 0.2,
-  },
-  infoValue: {
-    fontSize: 14,
-    fontFamily: "Inter_500Medium",
-    color: "#333333",
-    flex: 1,
-    textAlign: "right",
-    letterSpacing: 0.2,
-  },
-  statusBadge: {
-    marginTop: 12,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    alignSelf: "flex-start",
-  },
-  statusApproved: {
-    backgroundColor: "#E6F7E6",
-    borderWidth: 1,
-    borderColor: "#4CAF50",
-  },
-  statusText: {
-    fontSize: 14,
-    fontFamily: "Inter_500Medium",
-    color: "#2E7D32",
-    letterSpacing: 0.2,
-  },
-  contentPlaceholder: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 16,
-    padding: 40,
     alignItems: "center",
-    justifyContent: "center",
-    minHeight: 200,
   },
-  placeholderText: {
+  balanceLeft: {
+    flex: 1,
+  },
+  balanceLabel: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    color: "#999999",
+    marginBottom: 6,
+    letterSpacing: 0.2,
+  },
+  balanceAmount: {
     fontSize: 24,
-    fontFamily: "Poppins_600SemiBold",
-    color: "#333333",
-    marginBottom: 12,
+    fontFamily: "Poppins_700Bold",
+    color: "#0066CC",
     letterSpacing: 0.3,
   },
-  placeholderSubtext: {
-    fontSize: 16,
-    fontFamily: "Inter_400Regular",
-    color: "#666666",
-    textAlign: "center",
-    lineHeight: 24,
-    letterSpacing: 0.2,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.6)",
+  balanceIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: "#E6F2FF",
     justifyContent: "center",
     alignItems: "center",
-    padding: 24,
   },
-  modalContent: {
+  balanceIcon: {
+    fontSize: 24,
+  },
+  statsContainer: {
+    flexDirection: "row",
+    gap: 12,
+    marginBottom: 20,
+  },
+  statCard: {
+    flex: 1,
     backgroundColor: "#FFFFFF",
-    borderRadius: 24,
-    padding: 24,
-    width: "100%",
-    maxWidth: 400,
-    alignItems: "center",
+    borderRadius: 12,
+    padding: 16,
     shadowColor: "#000000",
     shadowOffset: {
       width: 0,
-      height: 8,
+      height: 1,
     },
-    shadowOpacity: 0.3,
-    shadowRadius: 24,
-    elevation: 16,
-  },
-  modalIconContainer: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: "#FFF5F5",
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 20,
-  },
-  modalIcon: {
-    fontSize: 36,
-  },
-  modalTitle: {
-    fontSize: 24,
-    fontFamily: "Poppins_600SemiBold",
-    color: "#333333",
-    marginBottom: 12,
-    letterSpacing: 0.3,
-    textAlign: "center",
-  },
-  modalMessage: {
-    fontSize: 16,
-    fontFamily: "Inter_400Regular",
-    color: "#666666",
-    textAlign: "center",
-    lineHeight: 24,
-    marginBottom: 32,
-    letterSpacing: 0.2,
-    paddingHorizontal: 8,
-  },
-  modalButtons: {
-    flexDirection: "row",
-    width: "100%",
-  },
-  modalButton: {
-    flex: 1,
-    paddingVertical: 14,
-    paddingHorizontal: 24,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-    minHeight: 48,
-  },
-  modalButtonCancel: {
-    backgroundColor: "#F5F5F5",
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 2,
     borderWidth: 1,
-    borderColor: "#E0E0E0",
-    marginRight: 12,
+    borderColor: "#F0F0F0",
   },
-  modalButtonCancelText: {
-    fontSize: 16,
-    fontFamily: "Poppins_600SemiBold",
+  statLabel: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    color: "#999999",
+    marginBottom: 8,
+    letterSpacing: 0.2,
+  },
+  statValue: {
+    fontSize: 24,
+    fontFamily: "Poppins_700Bold",
     color: "#333333",
     letterSpacing: 0.3,
   },
-  modalButtonConfirm: {
-    backgroundColor: "#FF3B30",
-    shadowColor: "#FF3B30",
+  registerButton: {
+    backgroundColor: "#0066CC",
+    borderRadius: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 24,
+    shadowColor: "#0066CC",
     shadowOffset: {
       width: 0,
       height: 4,
@@ -485,11 +593,211 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 8,
   },
-  modalButtonConfirmText: {
+  registerButtonText: {
     fontSize: 16,
     fontFamily: "Poppins_600SemiBold",
     color: "#FFFFFF",
     letterSpacing: 0.3,
   },
+  sectionHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontFamily: "Poppins_600SemiBold",
+    color: "#333333",
+    letterSpacing: 0.3,
+  },
+  viewAllText: {
+    fontSize: 14,
+    fontFamily: "Inter_500Medium",
+    color: "#0066CC",
+    letterSpacing: 0.2,
+  },
+  registrationsList: {
+    gap: 12,
+  },
+  registrationCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 12,
+    padding: 16,
+    shadowColor: "#000000",
+    shadowOffset: {
+      width: 0,
+      height: 1,
+    },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 2,
+    borderWidth: 1,
+    borderColor: "#F0F0F0",
+  },
+  registrationContent: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  registrationLeft: {
+    flex: 1,
+  },
+  registrationName: {
+    fontSize: 16,
+    fontFamily: "Poppins_600SemiBold",
+    color: "#333333",
+    marginBottom: 4,
+    letterSpacing: 0.2,
+  },
+  registrationDate: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    color: "#999999",
+    letterSpacing: 0.2,
+  },
+  registrationStatus: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    backgroundColor: "#FFF4E6",
+  },
+  registrationStatusInstalled: {
+    backgroundColor: "#E8F5E9",
+  },
+  registrationStatusApproved: {
+    backgroundColor: "#E3F2FD",
+  },
+  registrationStatusText: {
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+    color: "#FFA500",
+    textTransform: "capitalize",
+  },
+  registrationStatusTextInstalled: {
+    color: "#4CAF50",
+  },
+  registrationStatusTextApproved: {
+    color: "#2196F3",
+  },
+  emptyState: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 12,
+    padding: 32,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#F0F0F0",
+    borderStyle: "dashed",
+  },
+  emptyStateIcon: {
+    fontSize: 48,
+    marginBottom: 12,
+  },
+  emptyStateText: {
+    fontSize: 16,
+    fontFamily: "Poppins_600SemiBold",
+    color: "#333333",
+    marginBottom: 4,
+    letterSpacing: 0.2,
+  },
+  emptyStateSubtext: {
+    fontSize: 14,
+    fontFamily: "Inter_400Regular",
+    color: "#999999",
+    textAlign: "center",
+    letterSpacing: 0.2,
+  },
+  greetingContainer: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  greeting: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    color: "#666666",
+    marginBottom: 2,
+    letterSpacing: 0.2,
+  },
+  name: {
+    fontSize: 18,
+    fontFamily: "Poppins_600SemiBold",
+    color: "#333333",
+    letterSpacing: 0.3,
+  },
+  profileButton: {
+    marginRight: 0,
+  },
+  notificationButton: {
+    padding: 4,
+  },
+  notificationIconContainer: {
+    position: "relative",
+    width: 28,
+    height: 28,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  notificationIcon: {
+    fontSize: 20,
+  },
+  notificationBadge: {
+    position: "absolute",
+    top: -4,
+    right: -4,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: "#FF3B30",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 3,
+    borderWidth: 2,
+    borderColor: "#F5F7FA",
+  },
+  notificationBadgeText: {
+    fontSize: 9,
+    fontFamily: "Inter_600SemiBold",
+    color: "#FFFFFF",
+    fontWeight: "bold",
+  },
+  profileIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#0066CC",
+    justifyContent: "center",
+    alignItems: "center",
+    position: "relative",
+  },
+  profileInitial: {
+    fontSize: 20,
+    fontFamily: "Poppins_600SemiBold",
+    color: "#FFFFFF",
+    letterSpacing: 0.3,
+  },
+  statusBadge: {
+    position: "absolute",
+    bottom: -2,
+    right: -2,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 2,
+    borderColor: "#F5F7FA",
+    backgroundColor: "#FFF4E6", // Light orange background for pending
+  },
+  statusBadgeApproved: {
+    backgroundColor: "#4CAF50",
+  },
+  statusBadgeIcon: {
+    fontSize: 9,
+    color: "#FFA500",
+    fontWeight: "bold",
+  },
+  body: {
+    flex: 1,
+    // Empty for now - content will be added later
+  },
 });
-

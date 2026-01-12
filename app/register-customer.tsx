@@ -1,0 +1,577 @@
+import { useState, useEffect } from "react";
+import {
+  View,
+  Text,
+  ScrollView,
+  KeyboardAvoidingView,
+  Platform,
+  Keyboard,
+  Alert,
+  ActivityIndicator,
+  TouchableOpacity,
+  StatusBar,
+} from "react-native";
+import { useRouter } from "expo-router";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useFonts } from "expo-font";
+import {
+  Poppins_600SemiBold,
+  Poppins_700Bold,
+} from "@expo-google-fonts/poppins";
+import { Inter_400Regular, Inter_500Medium } from "@expo-google-fonts/inter";
+import {
+  useSafeAreaInsets,
+  SafeAreaView,
+} from "react-native-safe-area-context";
+import { supabase } from "../lib/supabase";
+import {
+  customerRegistrationSchema,
+  CustomerRegistrationFormData,
+} from "../lib/validation/customerRegistrationSchemas";
+import CustomerInfoStep from "../components/customer-register/CustomerInfoStep";
+import InstallationDetailsStep from "../components/customer-register/InstallationDetailsStep";
+import VisitDetailsStep from "../components/customer-register/VisitDetailsStep";
+import { registerStyles } from "../components/register/styles";
+import {
+  registerCustomerToMSForms,
+  CustomerRegistrationData,
+} from "../lib/services/msFormsService";
+import { formatDateForMSForms } from "../lib/utils/customerRegistration";
+
+const STEPS = [
+  { id: 1, title: "Customer Information" },
+  { id: 2, title: "Installation Details" },
+  { id: 3, title: "Visit Details" },
+];
+
+export default function RegisterCustomerScreen() {
+  const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const [currentStep, setCurrentStep] = useState(1);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [agentData, setAgentData] = useState<any>(null);
+  const [selectedTown, setSelectedTown] = useState("");
+
+  const [fontsLoaded] = useFonts({
+    Poppins_600SemiBold,
+    Poppins_700Bold,
+    Inter_400Regular,
+    Inter_500Medium,
+  });
+
+  const {
+    control,
+    handleSubmit,
+    trigger,
+    formState: { errors },
+    watch,
+  } = useForm<CustomerRegistrationFormData>({
+    resolver: zodResolver(customerRegistrationSchema),
+    mode: "onBlur",
+    defaultValues: {
+      customerName: "",
+      airtelNumber: "",
+      alternateNumber: "",
+      email: "",
+      preferredPackage: "premium",
+      installationTown: "",
+      deliveryLandmark: "",
+      installationLocation: "",
+      visitDate: "",
+      visitTime: "",
+    },
+  });
+
+  const watchedTown = watch("installationTown");
+
+  useEffect(() => {
+    if (watchedTown) {
+      setSelectedTown(watchedTown);
+    }
+  }, [watchedTown]);
+
+  useEffect(() => {
+    loadAgentData();
+  }, []);
+
+  const loadAgentData = async () => {
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) {
+        router.replace("/login" as any);
+        return;
+      }
+
+      const { data: agent, error } = await supabase
+        .from("agents")
+        .select("*")
+        .eq("id", user.id)
+        .single();
+
+      if (error || !agent) {
+        Alert.alert("Error", "Agent profile not found");
+        router.back();
+        return;
+      }
+
+      if (agent.status !== "approved") {
+        Alert.alert(
+          "Access Denied",
+          "Your account must be approved before you can register customers."
+        );
+        router.back();
+        return;
+      }
+
+      setAgentData(agent);
+    } catch (error: any) {
+      console.error("Error loading agent data:", error);
+      Alert.alert("Error", "Failed to load agent data");
+      router.back();
+    }
+  };
+
+  const handleNext = async () => {
+    let fieldsToValidate: (keyof CustomerRegistrationFormData)[] = [];
+
+    if (currentStep === 1) {
+      fieldsToValidate = [
+        "customerName",
+        "airtelNumber",
+        "alternateNumber",
+        "email",
+        "preferredPackage",
+      ];
+    } else if (currentStep === 2) {
+      fieldsToValidate = [
+        "installationTown",
+        "deliveryLandmark",
+        "installationLocation",
+      ];
+    }
+
+    const isValid = await trigger(fieldsToValidate);
+    if (isValid && currentStep < STEPS.length) {
+      setCurrentStep(currentStep + 1);
+    }
+  };
+
+  const handleBack = () => {
+    if (currentStep > 1) {
+      setCurrentStep(currentStep - 1);
+    }
+  };
+
+  const onSubmit = async (data: CustomerRegistrationFormData) => {
+    if (!agentData) {
+      Alert.alert("Error", "Agent data not loaded");
+      return;
+    }
+
+    setIsSubmitting(true);
+    Keyboard.dismiss();
+
+    try {
+      // Prepare customer data for MS Forms
+      const customerData: CustomerRegistrationData = {
+        customerName: data.customerName,
+        airtelNumber: data.airtelNumber,
+        alternateNumber: data.alternateNumber,
+        email: data.email,
+        preferredPackage: data.preferredPackage,
+        installationTown: data.installationTown,
+        deliveryLandmark: data.deliveryLandmark,
+        installationLocation: data.installationLocation,
+        visitDate: data.visitDate,
+        visitTime: data.visitTime,
+      };
+
+      // Prepare agent data
+      const agentInfo = {
+        name: agentData.name,
+        mobile: agentData.airtel_phone || agentData.safaricom_phone || "",
+      };
+
+      // Step 1: Save to database first (for offline capability)
+      const { data: dbRegistration, error: dbError } = await supabase
+        .from("customer_registrations")
+        .insert({
+          agent_id: agentData.id,
+          customer_name: data.customerName,
+          airtel_number: data.airtelNumber,
+          alternate_number: data.alternateNumber,
+          email: data.email,
+          preferred_package: data.preferredPackage,
+          installation_town: data.installationTown,
+          delivery_landmark: data.deliveryLandmark,
+          installation_location: data.installationLocation,
+          visit_date: data.visitDate,
+          visit_time: data.visitTime,
+          status: "pending",
+        })
+        .select()
+        .single();
+
+      if (dbError) {
+        throw new Error(`Database error: ${dbError.message}`);
+      }
+
+      // Step 2: Submit to Microsoft Forms
+      let msFormsResult;
+      try {
+        console.log("=== MS Forms Submission Start ===");
+        console.log("Customer Data:", JSON.stringify(customerData, null, 2));
+        console.log("Agent Info:", JSON.stringify(agentInfo, null, 2));
+
+        msFormsResult = await registerCustomerToMSForms(
+          customerData,
+          agentInfo
+        );
+
+        console.log("=== MS Forms Submission Result ===");
+        console.log("Success:", msFormsResult.success);
+        console.log("Response ID:", msFormsResult.responseId);
+        console.log("Submit Date:", msFormsResult.submitDate);
+        console.log("Responder:", msFormsResult.responder);
+        console.log("Error:", msFormsResult.error);
+        console.log("Full Response:", JSON.stringify(msFormsResult, null, 2));
+
+        if (msFormsResult.success && msFormsResult.responseId) {
+          console.log(
+            "✅ MS Forms submission successful! Response ID:",
+            msFormsResult.responseId
+          );
+          // Update database with MS Forms response ID
+          const { error: updateError } = await supabase
+            .from("customer_registrations")
+            .update({
+              ms_forms_response_id: msFormsResult.responseId,
+              ms_forms_submitted_at: new Date().toISOString(),
+            })
+            .eq("id", dbRegistration.id);
+
+          if (updateError) {
+            console.error("Error updating MS Forms response ID:", updateError);
+          } else {
+            console.log("✅ Database updated with MS Forms response ID");
+          }
+        } else {
+          console.warn("⚠️ MS Forms submission returned success=false");
+          console.warn("Error message:", msFormsResult.error);
+        }
+      } catch (msFormsError: any) {
+        console.error("=== MS Forms Submission Error ===");
+        console.error("Error Type:", msFormsError?.constructor?.name);
+        console.error("Error Message:", msFormsError?.message);
+        console.error("Error Stack:", msFormsError?.stack);
+        console.error("Full Error:", JSON.stringify(msFormsError, null, 2));
+
+        // Registration is saved in database, but MS Forms submission failed
+        // This is okay - we can retry later
+        Alert.alert(
+          "Registration Saved",
+          "Customer registration has been saved, but submission to Microsoft Forms failed. It will be retried automatically.",
+          [
+            {
+              text: "OK",
+              onPress: () => router.replace("/dashboard" as any),
+            },
+          ]
+        );
+        return;
+      }
+
+      // Success!
+      Alert.alert("Success!", "Customer registered successfully!", [
+        {
+          text: "OK",
+          onPress: () => router.replace("/dashboard" as any),
+        },
+      ]);
+    } catch (error: any) {
+      console.error("Registration error:", error);
+      Alert.alert(
+        "Registration Failed",
+        error.message || "Failed to register customer. Please try again."
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  if (!fontsLoaded || !agentData) {
+    return (
+      <View
+        style={{
+          flex: 1,
+          justifyContent: "center",
+          alignItems: "center",
+          backgroundColor: "#F5F7FA",
+        }}
+      >
+        <ActivityIndicator size="large" color="#0066CC" />
+      </View>
+    );
+  }
+
+  return (
+    <SafeAreaView
+      style={{ flex: 1, backgroundColor: "#F5F7FA" }}
+      edges={["top", "bottom"]}
+    >
+      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        keyboardVerticalOffset={0}
+      >
+        {/* Header with Back Button */}
+        <View
+          style={{
+            backgroundColor: "#FFFFFF",
+            paddingTop: 12,
+            paddingBottom: 12,
+            paddingHorizontal: 20,
+            flexDirection: "row",
+            alignItems: "center",
+            borderBottomWidth: 1,
+            borderBottomColor: "#F0F0F0",
+            shadowColor: "#000",
+            shadowOffset: { width: 0, height: 1 },
+            shadowOpacity: 0.05,
+            shadowRadius: 2,
+            elevation: 2,
+          }}
+        >
+          <TouchableOpacity
+            onPress={() => router.back()}
+            style={{
+              padding: 8,
+              marginRight: 12,
+            }}
+            activeOpacity={0.7}
+          >
+            <Text style={{ fontSize: 24 }}>←</Text>
+          </TouchableOpacity>
+          <View style={{ flex: 1 }}>
+            <Text
+              style={{
+                fontSize: 20,
+                fontFamily: "Poppins_700Bold",
+                color: "#333333",
+              }}
+            >
+              Register Customer
+            </Text>
+            <Text
+              style={{
+                fontSize: 12,
+                fontFamily: "Inter_400Regular",
+                color: "#999999",
+                marginTop: 2,
+              }}
+            >
+              Step {currentStep} of {STEPS.length}
+            </Text>
+          </View>
+        </View>
+
+        {/* Progress Indicator */}
+        <View
+          style={{
+            backgroundColor: "#FFFFFF",
+            paddingVertical: 12,
+            paddingHorizontal: 24,
+            borderBottomWidth: 1,
+            borderBottomColor: "#F0F0F0",
+          }}
+        >
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 8,
+            }}
+          >
+            {STEPS.map((step, index) => (
+              <View key={step.id} style={{ flex: 1 }}>
+                <View
+                  style={{
+                    height: 4,
+                    borderRadius: 2,
+                    backgroundColor:
+                      index + 1 <= currentStep ? "#0066CC" : "#E8E8E8",
+                  }}
+                />
+                <Text
+                  style={{
+                    fontSize: 10,
+                    fontFamily: "Inter_500Medium",
+                    color: index + 1 <= currentStep ? "#0066CC" : "#999999",
+                    marginTop: 6,
+                    textAlign: "center",
+                  }}
+                  numberOfLines={1}
+                >
+                  {step.title}
+                </Text>
+              </View>
+            ))}
+          </View>
+        </View>
+
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{ paddingBottom: 100 }}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Form Content */}
+          <View style={{ padding: 20 }}>
+            {currentStep === 1 && <CustomerInfoStep control={control} />}
+            {currentStep === 2 && (
+              <InstallationDetailsStep
+                control={control}
+                selectedTown={selectedTown}
+                onTownChange={setSelectedTown}
+              />
+            )}
+            {currentStep === 3 && <VisitDetailsStep control={control} />}
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+
+      {/* Fixed Navigation Buttons */}
+      <View
+        style={{
+          position: "absolute",
+          bottom: 0,
+          left: 0,
+          right: 0,
+          flexDirection: "row",
+          paddingHorizontal: 20,
+          paddingTop: 12,
+          paddingBottom: Math.max(insets.bottom, 12),
+          backgroundColor: "#FFFFFF",
+          borderTopWidth: 1,
+          borderTopColor: "#F0F0F0",
+          gap: 10,
+          shadowColor: "#000",
+          shadowOffset: { width: 0, height: -2 },
+          shadowOpacity: 0.05,
+          shadowRadius: 4,
+          elevation: 5,
+        }}
+      >
+        {currentStep > 1 && (
+          <TouchableOpacity
+            style={{
+              paddingVertical: 12,
+              paddingHorizontal: 20,
+              borderRadius: 10,
+              backgroundColor: "#F8F9FA",
+              alignItems: "center",
+              justifyContent: "center",
+              minWidth: 80,
+            }}
+            onPress={handleBack}
+            disabled={isSubmitting}
+            activeOpacity={0.7}
+          >
+            <Text
+              style={{
+                fontFamily: "Inter_500Medium",
+                color: "#666666",
+                fontSize: 15,
+              }}
+            >
+              Back
+            </Text>
+          </TouchableOpacity>
+        )}
+        {currentStep < STEPS.length ? (
+          <TouchableOpacity
+            style={{
+              flex: 1,
+              paddingVertical: 12,
+              borderRadius: 10,
+              backgroundColor: "#0066CC",
+              alignItems: "center",
+              justifyContent: "center",
+              shadowColor: "#0066CC",
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.2,
+              shadowRadius: 4,
+              elevation: 3,
+            }}
+            onPress={handleNext}
+            disabled={isSubmitting}
+            activeOpacity={0.8}
+          >
+            <Text
+              style={{
+                fontFamily: "Poppins_600SemiBold",
+                color: "#FFFFFF",
+                fontSize: 15,
+                letterSpacing: 0.3,
+              }}
+            >
+              Next →
+            </Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            style={{
+              flex: 1,
+              paddingVertical: 12,
+              borderRadius: 10,
+              backgroundColor: "#0066CC",
+              alignItems: "center",
+              justifyContent: "center",
+              flexDirection: "row",
+              gap: 8,
+              shadowColor: "#0066CC",
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.2,
+              shadowRadius: 4,
+              elevation: 3,
+            }}
+            onPress={handleSubmit(onSubmit)}
+            disabled={isSubmitting}
+            activeOpacity={0.8}
+          >
+            {isSubmitting ? (
+              <>
+                <ActivityIndicator size="small" color="#FFFFFF" />
+                <Text
+                  style={{
+                    fontFamily: "Poppins_600SemiBold",
+                    color: "#FFFFFF",
+                    fontSize: 15,
+                    letterSpacing: 0.3,
+                  }}
+                >
+                  Submitting...
+                </Text>
+              </>
+            ) : (
+              <Text
+                style={{
+                  fontFamily: "Poppins_600SemiBold",
+                  color: "#FFFFFF",
+                  fontSize: 15,
+                  letterSpacing: 0.3,
+                }}
+              >
+                Submit
+              </Text>
+            )}
+          </TouchableOpacity>
+        )}
+      </View>
+    </SafeAreaView>
+  );
+}

@@ -246,8 +246,8 @@ export default function VerifyEmailScreen() {
         await AsyncStorage.removeItem("pendingVerificationEmail");
         await AsyncStorage.removeItem("pendingVerificationPassword");
 
-        // Navigate to pending approval
-        router.replace("/pending-approval" as any);
+        // Navigate to dashboard (will show pending status)
+        router.replace("/dashboard" as any);
         setIsVerifying(false);
         return;
       }
@@ -291,7 +291,7 @@ export default function VerifyEmailScreen() {
 
         await AsyncStorage.removeItem("pendingVerificationEmail");
         await AsyncStorage.removeItem("pendingVerificationPassword");
-        router.replace("/pending-approval" as any);
+        router.replace("/dashboard" as any);
         setIsVerifying(false);
         return;
       }
