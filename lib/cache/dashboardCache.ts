@@ -10,6 +10,10 @@ export interface CachedDashboardData {
   balance: number;
   totalRegistered: number;
   totalInstalled: number;
+  premiumRegistered?: number;
+  standardRegistered?: number;
+  premiumInstalled?: number;
+  standardInstalled?: number;
   recentRegistrations: any[];
   timestamp: number;
 }

@@ -72,6 +72,10 @@ export default function DashboardScreen() {
   const [balance, setBalance] = useState(0); // Agent commission balance
   const [totalRegistered, setTotalRegistered] = useState(0);
   const [totalInstalled, setTotalInstalled] = useState(0);
+  const [premiumRegistered, setPremiumRegistered] = useState(0);
+  const [standardRegistered, setStandardRegistered] = useState(0);
+  const [premiumInstalled, setPremiumInstalled] = useState(0);
+  const [standardInstalled, setStandardInstalled] = useState(0);
   const [recentRegistrations, setRecentRegistrations] = useState<any[]>([]);
   const [isLoadingRegistrations, setIsLoadingRegistrations] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -326,6 +330,10 @@ export default function DashboardScreen() {
           setBalance(cachedDashboardData.balance);
           setTotalRegistered(cachedDashboardData.totalRegistered);
           setTotalInstalled(cachedDashboardData.totalInstalled);
+          setPremiumRegistered(cachedDashboardData.premiumRegistered ?? 0);
+          setStandardRegistered(cachedDashboardData.standardRegistered ?? 0);
+          setPremiumInstalled(cachedDashboardData.premiumInstalled ?? 0);
+          setStandardInstalled(cachedDashboardData.standardInstalled ?? 0);
           setRecentRegistrations(cachedDashboardData.recentRegistrations);
           setIsLoading(false);
           return;
@@ -347,6 +355,10 @@ export default function DashboardScreen() {
         setBalance(cachedDashboardData.balance);
         setTotalRegistered(cachedDashboardData.totalRegistered);
         setTotalInstalled(cachedDashboardData.totalInstalled);
+        setPremiumRegistered(cachedDashboardData.premiumRegistered ?? 0);
+        setStandardRegistered(cachedDashboardData.standardRegistered ?? 0);
+        setPremiumInstalled(cachedDashboardData.premiumInstalled ?? 0);
+        setStandardInstalled(cachedDashboardData.standardInstalled ?? 0);
         setRecentRegistrations(cachedDashboardData.recentRegistrations);
         setIsLoading(false); // Show cached data immediately
       }
@@ -401,6 +413,10 @@ export default function DashboardScreen() {
         setBalance(cachedDashboardData.balance);
         setTotalRegistered(cachedDashboardData.totalRegistered);
         setTotalInstalled(cachedDashboardData.totalInstalled);
+        setPremiumRegistered(cachedDashboardData.premiumRegistered ?? 0);
+        setStandardRegistered(cachedDashboardData.standardRegistered ?? 0);
+        setPremiumInstalled(cachedDashboardData.premiumInstalled ?? 0);
+        setStandardInstalled(cachedDashboardData.standardInstalled ?? 0);
         setRecentRegistrations(cachedDashboardData.recentRegistrations);
       } else {
         const cachedAgentData = await getCachedAgentData();
@@ -489,7 +505,7 @@ export default function DashboardScreen() {
         setRecentRegistrations(enhancedRegistrations);
       }
 
-      // Calculate stats
+      // Calculate stats with premium/standard breakdown
       const { count: totalRegistered, error: countError } = await supabase
         .from("customer_registrations")
         .select("*", { count: "exact", head: true })
@@ -499,6 +515,29 @@ export default function DashboardScreen() {
         setTotalRegistered(totalRegistered);
       }
 
+      // Get premium registered count
+      const { count: premiumRegisteredCount, error: premiumRegError } = await supabase
+        .from("customer_registrations")
+        .select("*", { count: "exact", head: true })
+        .eq("agent_id", agentId)
+        .eq("preferred_package", "premium");
+
+      if (!premiumRegError && premiumRegisteredCount !== null) {
+        setPremiumRegistered(premiumRegisteredCount);
+      }
+
+      // Get standard registered count
+      const { count: standardRegisteredCount, error: standardRegError } = await supabase
+        .from("customer_registrations")
+        .select("*", { count: "exact", head: true })
+        .eq("agent_id", agentId)
+        .eq("preferred_package", "standard");
+
+      if (!standardRegError && standardRegisteredCount !== null) {
+        setStandardRegistered(standardRegisteredCount);
+      }
+
+      // Get total installed count
       const { count: totalInstalled, error: installedError } = await supabase
         .from("customer_registrations")
         .select("*", { count: "exact", head: true })
@@ -509,6 +548,30 @@ export default function DashboardScreen() {
         setTotalInstalled(totalInstalled);
       }
 
+      // Get premium installed count
+      const { count: premiumInstalledCount, error: premiumInstError } = await supabase
+        .from("customer_registrations")
+        .select("*", { count: "exact", head: true })
+        .eq("agent_id", agentId)
+        .eq("status", "installed")
+        .eq("preferred_package", "premium");
+
+      if (!premiumInstError && premiumInstalledCount !== null) {
+        setPremiumInstalled(premiumInstalledCount);
+      }
+
+      // Get standard installed count
+      const { count: standardInstalledCount, error: standardInstError } = await supabase
+        .from("customer_registrations")
+        .select("*", { count: "exact", head: true })
+        .eq("agent_id", agentId)
+        .eq("status", "installed")
+        .eq("preferred_package", "standard");
+
+      if (!standardInstError && standardInstalledCount !== null) {
+        setStandardInstalled(standardInstalledCount);
+      }
+
       // Save to cache when online
       if (online && agentData) {
         await saveDashboardDataToCache({
@@ -516,6 +579,10 @@ export default function DashboardScreen() {
           balance: balance ?? 0,
           totalRegistered: totalRegistered ?? 0,
           totalInstalled: totalInstalled ?? 0,
+          premiumRegistered: premiumRegistered ?? 0,
+          standardRegistered: standardRegistered ?? 0,
+          premiumInstalled: premiumInstalled ?? 0,
+          standardInstalled: standardInstalled ?? 0,
           recentRegistrations: recentRegistrations,
         });
       }
@@ -578,7 +645,7 @@ export default function DashboardScreen() {
             ]}
           >
             {agentData.status === "approved" && (
-              <Text style={styles.statusBannerIcon}>✓</Text>
+              <Text style={styles.statusBannerIcon}></Text>
             )}
             {agentData.status === "pending" && (
               <Text style={styles.statusBannerIcon}>⏳</Text>
@@ -712,7 +779,7 @@ export default function DashboardScreen() {
               <View style={styles.totalEarningsContainer}>
                 <Text style={styles.totalEarningsLabel}>Total Earnings</Text>
                 <Text style={styles.totalEarningsAmount}>
-                  KSh {(agentData?.total_earnings ?? totalInstalled * 150).toLocaleString()}
+                  KSh {(agentData?.total_earnings ?? (premiumInstalled * 300 + standardInstalled * 150)).toLocaleString()}
                 </Text>
               </View>
             </View>
@@ -727,10 +794,44 @@ export default function DashboardScreen() {
           <View style={styles.statCard}>
             <Text style={styles.statLabel}>Total Registered</Text>
             <Text style={styles.statValue}>{totalRegistered}</Text>
+            <View style={styles.statBreakdown}>
+              <View style={styles.statBreakdownRow}>
+                <View style={styles.statBreakdownItem}>
+                  <Text style={styles.statBreakdownLabel}>Premium</Text>
+                  <Text style={[styles.statBreakdownValue, styles.statBreakdownPremium]}>
+                    {premiumRegistered}
+                  </Text>
+                </View>
+                <View style={styles.statBreakdownDivider} />
+                <View style={styles.statBreakdownItem}>
+                  <Text style={styles.statBreakdownLabel}>Standard</Text>
+                  <Text style={[styles.statBreakdownValue, styles.statBreakdownStandard]}>
+                    {standardRegistered}
+                  </Text>
+                </View>
+              </View>
+            </View>
           </View>
           <View style={styles.statCard}>
             <Text style={styles.statLabel}>Total Installed</Text>
             <Text style={styles.statValue}>{totalInstalled}</Text>
+            <View style={styles.statBreakdown}>
+              <View style={styles.statBreakdownRow}>
+                <View style={styles.statBreakdownItem}>
+                  <Text style={styles.statBreakdownLabel}>Premium</Text>
+                  <Text style={[styles.statBreakdownValue, styles.statBreakdownPremium]}>
+                    {premiumInstalled}
+                  </Text>
+                </View>
+                <View style={styles.statBreakdownDivider} />
+                <View style={styles.statBreakdownItem}>
+                  <Text style={styles.statBreakdownLabel}>Standard</Text>
+                  <Text style={[styles.statBreakdownValue, styles.statBreakdownStandard]}>
+                    {standardInstalled}
+                  </Text>
+                </View>
+              </View>
+            </View>
           </View>
         </View>
 
@@ -975,12 +1076,53 @@ const styles = StyleSheet.create({
     color: "#999999",
     marginBottom: 8,
     letterSpacing: 0.2,
+    textAlign: "center",
   },
   statValue: {
     fontSize: 24,
     fontFamily: "Poppins_700Bold",
     color: "#333333",
     letterSpacing: 0.3,
+    textAlign: "center",
+  },
+  statBreakdown: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: "#E0E0E0",
+  },
+  statBreakdownRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-around",
+  },
+  statBreakdownItem: {
+    flex: 1,
+    alignItems: "center",
+  },
+  statBreakdownLabel: {
+    fontSize: 10,
+    fontFamily: "Inter_400Regular",
+    color: "#999999",
+    marginBottom: 4,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  statBreakdownValue: {
+    fontSize: 18,
+    fontFamily: "Poppins_600SemiBold",
+  },
+  statBreakdownPremium: {
+    color: "#9C27B0",
+  },
+  statBreakdownStandard: {
+    color: "#0066CC",
+  },
+  statBreakdownDivider: {
+    width: 1,
+    height: 30,
+    backgroundColor: "#E0E0E0",
+    marginHorizontal: 8,
   },
   registerButton: {
     backgroundColor: "#0066CC",

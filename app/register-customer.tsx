@@ -10,6 +10,9 @@ import {
   ActivityIndicator,
   TouchableOpacity,
   StatusBar,
+  Modal,
+  StyleSheet,
+  Linking,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { useForm } from "react-hook-form";
@@ -60,6 +63,7 @@ export default function RegisterCustomerScreen() {
   const [selectedTown, setSelectedTown] = useState("");
   const [pendingCount, setPendingCount] = useState(0);
   const [isOffline, setIsOffline] = useState(false);
+  const [showApprovalModal, setShowApprovalModal] = useState(false);
 
   const [fontsLoaded] = useFonts({
     Poppins_600SemiBold,
@@ -149,11 +153,8 @@ export default function RegisterCustomerScreen() {
       }
 
       if (agent.status !== "approved") {
-        Alert.alert(
-          "Access Denied",
-          "Your account must be approved before you can register customers."
-        );
-        router.back();
+        setAgentData(agent); // Store agent data to show status in modal
+        setShowApprovalModal(true);
         return;
       }
 
@@ -371,7 +372,40 @@ export default function RegisterCustomerScreen() {
     }
   };
 
-  if (!fontsLoaded || !agentData) {
+  const getStatusMessage = (status: string) => {
+    switch (status) {
+      case "pending":
+        return {
+          title: "Awaiting Approval",
+          message: "Your account is currently pending approval from the administrator.",
+          details: "Once your account is approved, you'll be able to register customers and start earning commissions.",
+          icon: "⏳",
+        };
+      case "banned":
+        return {
+          title: "Account Suspended",
+          message: "Your account has been suspended and you cannot register customers at this time.",
+          details: "Please contact support if you believe this is an error or if you have questions about your account status.",
+          icon: "⚠️",
+        };
+      case "rejected":
+        return {
+          title: "Application Rejected",
+          message: "Your agent application has been rejected.",
+          details: "Please contact support for more information or to appeal this decision.",
+          icon: "✗",
+        };
+      default:
+        return {
+          title: "Access Restricted",
+          message: "Your account status does not allow customer registration.",
+          details: "Please contact support for assistance with your account.",
+          icon: "🔒",
+        };
+    }
+  };
+
+  if (!fontsLoaded || (!agentData && !showApprovalModal)) {
     return (
       <View
         style={{
@@ -386,11 +420,78 @@ export default function RegisterCustomerScreen() {
     );
   }
 
+  const statusInfo = agentData?.status ? getStatusMessage(agentData.status) : null;
+
   return (
-    <SafeAreaView
-      style={{ flex: 1, backgroundColor: "#F5F7FA" }}
-      edges={["top", "bottom"]}
-    >
+    <>
+      {/* Approval Status Modal */}
+      <Modal
+        visible={showApprovalModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => {
+          setShowApprovalModal(false);
+          router.back();
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            {statusInfo && (
+              <>
+                <View style={styles.modalIconContainer}>
+                  <Text style={styles.modalIcon}>{statusInfo.icon}</Text>
+                </View>
+                <Text style={styles.modalTitle}>{statusInfo.title}</Text>
+                <Text style={styles.modalMessage}>{statusInfo.message}</Text>
+                <View style={styles.modalDetailsContainer}>
+                  <Text style={styles.modalDetailsLabel}>What this means:</Text>
+                  <Text style={styles.modalDetailsText}>{statusInfo.details}</Text>
+                </View>
+                {agentData?.status === "pending" && (
+                  <View style={styles.modalInfoBox}>
+                    <Text style={styles.modalInfoText}>
+                      💡 Your application is under review. You'll receive a notification once your account is approved.
+                    </Text>
+                  </View>
+                )}
+                <View style={styles.modalSupportContainer}>
+                  <Text style={styles.modalSupportLabel}>Need help?</Text>
+                  <TouchableOpacity
+                    onPress={async () => {
+                      const phoneNumber = "0700776994";
+                      const url = `tel:${phoneNumber}`;
+                      const canOpen = await Linking.canOpenURL(url);
+                      if (canOpen) {
+                        await Linking.openURL(url);
+                      } else {
+                        Alert.alert("Support", `Call: ${phoneNumber}`);
+                      }
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.modalSupportNumber}>📞 0700776994</Text>
+                  </TouchableOpacity>
+                </View>
+                <TouchableOpacity
+                  style={styles.modalButton}
+                  onPress={() => {
+                    setShowApprovalModal(false);
+                    router.back();
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.modalButtonText}>Go to Dashboard</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      <SafeAreaView
+        style={{ flex: 1, backgroundColor: "#F5F7FA" }}
+        edges={["top", "bottom"]}
+      >
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
       <KeyboardAvoidingView
         style={{ flex: 1 }}
@@ -642,5 +743,124 @@ export default function RegisterCustomerScreen() {
         )}
       </View>
     </SafeAreaView>
+    </>
   );
 }
+
+const styles = StyleSheet.create({
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+  modalContent: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 20,
+    padding: 24,
+    width: "100%",
+    maxWidth: 400,
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  modalIconContainer: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: "#FFF4E6",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 20,
+  },
+  modalIcon: {
+    fontSize: 40,
+  },
+  modalTitle: {
+    fontSize: 22,
+    fontFamily: "Poppins_600SemiBold",
+    color: "#333333",
+    marginBottom: 12,
+    textAlign: "center",
+  },
+  modalMessage: {
+    fontSize: 16,
+    fontFamily: "Inter_400Regular",
+    color: "#666666",
+    textAlign: "center",
+    marginBottom: 20,
+    lineHeight: 24,
+  },
+  modalDetailsContainer: {
+    width: "100%",
+    backgroundColor: "#F5F5F5",
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 20,
+  },
+  modalDetailsLabel: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+    color: "#333333",
+    marginBottom: 8,
+  },
+  modalDetailsText: {
+    fontSize: 14,
+    fontFamily: "Inter_400Regular",
+    color: "#666666",
+    lineHeight: 20,
+  },
+  modalInfoBox: {
+    width: "100%",
+    backgroundColor: "#E3F2FD",
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 20,
+    borderLeftWidth: 4,
+    borderLeftColor: "#2196F3",
+  },
+  modalInfoText: {
+    fontSize: 13,
+    fontFamily: "Inter_400Regular",
+    color: "#1976D2",
+    lineHeight: 20,
+  },
+  modalButton: {
+    width: "100%",
+    backgroundColor: "#0066CC",
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modalButtonText: {
+    fontSize: 16,
+    fontFamily: "Poppins_600SemiBold",
+    color: "#FFFFFF",
+  },
+  modalSupportContainer: {
+    width: "100%",
+    alignItems: "center",
+    marginBottom: 20,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: "#E0E0E0",
+  },
+  modalSupportLabel: {
+    fontSize: 13,
+    fontFamily: "Inter_400Regular",
+    color: "#999999",
+    marginBottom: 8,
+  },
+  modalSupportNumber: {
+    fontSize: 16,
+    fontFamily: "Inter_600SemiBold",
+    color: "#0066CC",
+    textDecorationLine: "underline",
+  },
+});
