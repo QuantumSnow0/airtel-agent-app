@@ -76,3 +76,12 @@ After migration, verify:
 - Dashboard shows correct `total_earnings` and `available_balance`
 - Values match: `total_earnings = installed_count * 150`
 
+## Real-Time Updates
+
+The balance system now includes real-time updates:
+- Balance updates automatically when admin changes registration status
+- Registration status updates in real-time
+- No manual refresh needed
+
+See **[PROJECT_UPDATES.md](./PROJECT_UPDATES.md)** for complete feature documentation.
+

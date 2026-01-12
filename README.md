@@ -1,4 +1,33 @@
-# Welcome to your Expo app 👋
+# Airtel Agents Mobile App 👋
+
+A React Native mobile application built with Expo for Airtel agents to register customers and track commissions.
+
+## Features
+
+- ✅ **Customer Registration** - Register customers for Airtel SmartConnect services
+- ✅ **Microsoft Forms Integration** - Automatic submission to Microsoft Forms via Supabase Edge Functions
+- ✅ **Balance Tracking** - Real-time balance and earnings tracking (150 KSh per installed device)
+- ✅ **Real-Time Updates** - Automatic updates when admin changes registration status
+- ✅ **Pull-to-Refresh** - Manual refresh functionality
+- ✅ **Status Tracking** - Track registration status (pending, approved, installed)
+
+## Tech Stack
+
+- **Framework**: Expo (React Native)
+- **Backend**: Supabase (PostgreSQL, Auth, Edge Functions, Real-time)
+- **Integration**: Microsoft Forms API
+- **Language**: TypeScript
+
+## Documentation
+
+- **[PROJECT_UPDATES.md](./PROJECT_UPDATES.md)** - Latest features and updates
+- **[MS_FORMS_FIX_SUMMARY.md](./MS_FORMS_FIX_SUMMARY.md)** - Microsoft Forms integration details
+- **[BALANCE_IMPLEMENTATION_SUMMARY.md](./BALANCE_IMPLEMENTATION_SUMMARY.md)** - Balance system documentation
+- **[SUPABASE_EDGE_FUNCTION_SETUP.md](./SUPABASE_EDGE_FUNCTION_SETUP.md)** - Edge Function setup guide
+- **[ENV_SETUP.md](./ENV_SETUP.md)** - Environment variables setup
+- **[BUILD_GUIDE.md](./BUILD_GUIDE.md)** - Build and deployment guide
+
+## Quick Start
 
 This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
 

@@ -38,6 +38,12 @@ import {
   CustomerRegistrationData,
 } from "../lib/services/msFormsService";
 import { formatDateForMSForms } from "../lib/utils/customerRegistration";
+import {
+  savePendingRegistration,
+  initOfflineStorage,
+  getPendingCount,
+} from "../lib/services/offlineStorage";
+import { isOnline, syncPendingRegistrations } from "../lib/services/syncService";
 
 const STEPS = [
   { id: 1, title: "Customer Information" },
@@ -52,6 +58,8 @@ export default function RegisterCustomerScreen() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [agentData, setAgentData] = useState<any>(null);
   const [selectedTown, setSelectedTown] = useState("");
+  const [pendingCount, setPendingCount] = useState(0);
+  const [isOffline, setIsOffline] = useState(false);
 
   const [fontsLoaded] = useFonts({
     Poppins_600SemiBold,
@@ -93,7 +101,30 @@ export default function RegisterCustomerScreen() {
 
   useEffect(() => {
     loadAgentData();
+    initOfflineStorage();
+    checkOnlineStatus();
+    loadPendingCount();
+    
+    // Check online status periodically
+    const interval = setInterval(() => {
+      checkOnlineStatus();
+      loadPendingCount();
+    }, 5000);
+
+    return () => clearInterval(interval);
   }, []);
+
+  const checkOnlineStatus = async () => {
+    const online = await isOnline();
+    setIsOffline(!online);
+  };
+
+  const loadPendingCount = async () => {
+    if (agentData?.id) {
+      const count = await getPendingCount(agentData.id);
+      setPendingCount(count);
+    }
+  };
 
   const loadAgentData = async () => {
     try {
@@ -195,28 +226,66 @@ export default function RegisterCustomerScreen() {
         mobile: agentData.airtel_phone || agentData.safaricom_phone || "",
       };
 
-      // Step 1: Save to database first (for offline capability)
-      const { data: dbRegistration, error: dbError } = await supabase
-        .from("customer_registrations")
-        .insert({
-          agent_id: agentData.id,
-          customer_name: data.customerName,
-          airtel_number: data.airtelNumber,
-          alternate_number: data.alternateNumber,
-          email: data.email,
-          preferred_package: data.preferredPackage,
-          installation_town: data.installationTown,
-          delivery_landmark: data.deliveryLandmark,
-          installation_location: data.installationLocation,
-          visit_date: data.visitDate,
-          visit_time: data.visitTime,
-          status: "pending",
-        })
-        .select()
-        .single();
+      // Check if online
+      let online = await isOnline();
+      setIsOffline(!online);
 
-      if (dbError) {
-        throw new Error(`Database error: ${dbError.message}`);
+      let dbRegistration: any = null;
+
+      if (online) {
+        // Step 1: Try to save to database first
+        try {
+          const { data: registration, error: dbError } = await supabase
+            .from("customer_registrations")
+            .insert({
+              agent_id: agentData.id,
+              customer_name: data.customerName,
+              airtel_number: data.airtelNumber,
+              alternate_number: data.alternateNumber,
+              email: data.email,
+              preferred_package: data.preferredPackage,
+              installation_town: data.installationTown,
+              delivery_landmark: data.deliveryLandmark,
+              installation_location: data.installationLocation,
+              visit_date: data.visitDate,
+              visit_time: data.visitTime,
+              status: "pending",
+            })
+            .select()
+            .single();
+
+          if (dbError) {
+            throw dbError;
+          }
+
+          dbRegistration = registration;
+        } catch (dbError: any) {
+          console.warn("⚠️ Database save failed, saving offline:", dbError);
+          // Fall through to offline save
+          online = false;
+        }
+      }
+
+      // If offline or database save failed, save to offline storage
+      if (!online || !dbRegistration) {
+        const pendingId = await savePendingRegistration(
+          agentData.id,
+          customerData,
+          agentInfo
+        );
+        await loadPendingCount();
+
+        Alert.alert(
+          "Registration Saved Offline",
+          "Your registration has been saved and will be synced automatically when you're back online.",
+          [
+            {
+              text: "OK",
+              onPress: () => router.replace("/dashboard" as any),
+            },
+          ]
+        );
+        return;
       }
 
       // Step 2: Submit to Microsoft Forms

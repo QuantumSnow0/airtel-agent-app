@@ -1,33 +1,41 @@
 import {
-    Inter_400Regular,
-    Inter_500Medium,
-    Inter_600SemiBold,
+  Inter_400Regular,
+  Inter_500Medium,
+  Inter_600SemiBold,
 } from "@expo-google-fonts/inter";
 import {
-    Poppins_600SemiBold,
-    Poppins_700Bold,
+  Poppins_600SemiBold,
+  Poppins_700Bold,
 } from "@expo-google-fonts/poppins";
 import { useFonts } from "expo-font";
 import { useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    Animated,
-    RefreshControl,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  Animated,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Toast } from "../components/Toast";
 import {
-    CachedAgentData,
-    clearAgentDataCache,
-    getCachedAgentData,
-    saveAgentDataToCache,
+  CachedAgentData,
+  clearAgentDataCache,
+  getCachedAgentData,
+  saveAgentDataToCache,
 } from "../lib/cache/agentCache";
+import {
+  clearDashboardDataCache,
+  getCachedDashboardData,
+  saveDashboardDataToCache,
+} from "../lib/cache/dashboardCache";
+import { getPendingRegistrations, initOfflineStorage } from "../lib/services/offlineStorage";
+import { isOnline, setupAutoSync } from "../lib/services/syncService";
 import { supabase } from "../lib/supabase";
 
 // Helper function to get time-based greeting
@@ -67,7 +75,13 @@ export default function DashboardScreen() {
   const [recentRegistrations, setRecentRegistrations] = useState<any[]>([]);
   const [isLoadingRegistrations, setIsLoadingRegistrations] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [pendingSyncRegistrations, setPendingSyncRegistrations] = useState<Set<string>>(new Set());
   const spinValue = useRef(new Animated.Value(0)).current;
+  const [toastVisible, setToastVisible] = useState(false);
+  const [toastMessage, setToastMessage] = useState("");
+  const [toastType, setToastType] = useState<"info" | "success" | "error">("info");
+  const [isOffline, setIsOffline] = useState(false);
+  const wasOfflineRef = useRef(false);
 
   const [fontsLoaded] = useFonts({
     Poppins_600SemiBold,
@@ -79,6 +93,7 @@ export default function DashboardScreen() {
 
   useEffect(() => {
     setGreeting(getTimeBasedGreeting());
+    initOfflineStorage();
     loadUserData();
 
     // Listen for auth state changes (logout, etc.)
@@ -96,6 +111,27 @@ export default function DashboardScreen() {
       authListener.subscription.unsubscribe();
     };
   }, []);
+
+  // Setup auto-sync for pending registrations
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const showToast = (message: string, type: "info" | "success" | "error" = "info") => {
+      setToastMessage(message);
+      setToastType(type);
+      setToastVisible(true);
+    };
+
+    const cleanup = setupAutoSync(user.id, (current, total) => {
+      if (total > 0) {
+        showToast(`Syncing offline data... ${current} of ${total}`, "info");
+      }
+    });
+
+    return () => {
+      cleanup();
+    };
+  }, [user?.id]);
 
   // Real-time subscription for agent balance updates
   useEffect(() => {
@@ -193,9 +229,62 @@ export default function DashboardScreen() {
     }
   }, [agentData?.status]);
 
+  // Check network status periodically
+  useEffect(() => {
+    if (!user?.id) return;
+    
+    let isChecking = false;
+    
+    const checkNetworkStatus = async () => {
+      if (isChecking) return; // Prevent concurrent checks
+      isChecking = true;
+      
+      try {
+        const online = await isOnline();
+        const currentlyOffline = !online;
+        const previousOffline = wasOfflineRef.current;
+        
+        // Only update state if it changed
+        if (currentlyOffline !== isOffline) {
+          setIsOffline(currentlyOffline);
+          
+          // If just came back online (transitioned from offline to online), reload data
+          if (online && previousOffline && !currentlyOffline) {
+            console.log("🔄 Back online - refreshing data");
+            // Reload data when coming back online
+            loadUserData();
+          }
+          
+          // Update ref
+          wasOfflineRef.current = currentlyOffline;
+        }
+      } catch (error) {
+        console.error("Error checking network status:", error);
+      } finally {
+        isChecking = false;
+      }
+    };
+
+    // Check immediately (set initial state, but don't reload)
+    isOnline().then((online) => {
+      const offline = !online;
+      setIsOffline(offline);
+      wasOfflineRef.current = offline;
+    });
+
+    // Check every 10 seconds (less frequent to avoid issues)
+    const interval = setInterval(checkNetworkStatus, 10000);
+
+    return () => clearInterval(interval);
+  }, [user?.id]);
+
   const loadUserData = async () => {
     setIsLoading(true);
     try {
+      // Check if online
+      const online = await isOnline();
+      setIsOffline(!online);
+
       // Get current user
       const {
         data: { user: currentUser },
@@ -205,6 +294,7 @@ export default function DashboardScreen() {
       if (userError || !currentUser) {
         // No user - clear cache and redirect to login
         await clearAgentDataCache();
+        await clearDashboardDataCache();
         router.replace("/login" as any);
         return;
       }
@@ -227,13 +317,38 @@ export default function DashboardScreen() {
 
       setUser(currentUser);
 
-      // Try to load cached agent data first (for fast initial display)
-      const cachedAgentData = await getCachedAgentData();
-      let hasCachedData = false;
-      if (cachedAgentData) {
-        setAgentData(cachedAgentData);
+      // If offline, load from cache
+      if (!online) {
+        console.log("📴 Offline - loading from cache");
+        const cachedDashboardData = await getCachedDashboardData();
+        if (cachedDashboardData) {
+          setAgentData(cachedDashboardData.agentData);
+          setBalance(cachedDashboardData.balance);
+          setTotalRegistered(cachedDashboardData.totalRegistered);
+          setTotalInstalled(cachedDashboardData.totalInstalled);
+          setRecentRegistrations(cachedDashboardData.recentRegistrations);
+          setIsLoading(false);
+          return;
+        } else {
+          // No cache available - try to load agent cache at least
+          const cachedAgentData = await getCachedAgentData();
+          if (cachedAgentData) {
+            setAgentData(cachedAgentData);
+            setIsLoading(false);
+          }
+          return;
+        }
+      }
+
+      // Online - Try to load cached data first (for fast initial display)
+      const cachedDashboardData = await getCachedDashboardData();
+      if (cachedDashboardData) {
+        setAgentData(cachedDashboardData.agentData);
+        setBalance(cachedDashboardData.balance);
+        setTotalRegistered(cachedDashboardData.totalRegistered);
+        setTotalInstalled(cachedDashboardData.totalInstalled);
+        setRecentRegistrations(cachedDashboardData.recentRegistrations);
         setIsLoading(false); // Show cached data immediately
-        hasCachedData = true;
       }
 
       // Fetch fresh agent data from database (background fetch)
@@ -246,10 +361,11 @@ export default function DashboardScreen() {
 
       if (agentError) {
         console.error("Error loading agent data:", agentError);
-        // Agent record doesn't exist - treat as pending
-        // Clear cache and set agentData to null
-        await clearAgentDataCache();
-        setAgentData(null);
+        // If we have cached data, keep using it
+        if (!cachedDashboardData) {
+          await clearAgentDataCache();
+          setAgentData(null);
+        }
       } else {
         // Save fresh data to cache
         await saveAgentDataToCache(agent);
@@ -262,15 +378,35 @@ export default function DashboardScreen() {
       }
 
       // Load customer registrations data
-      if (currentUser) {
+      if (currentUser && online) {
         await loadCustomerData(currentUser.id);
+        
+        // Save complete dashboard data to cache after all data is loaded
+        if (agentData) {
+          await saveDashboardDataToCache({
+            agentData,
+            balance: balance ?? 0,
+            totalRegistered: totalRegistered ?? 0,
+            totalInstalled: totalInstalled ?? 0,
+            recentRegistrations: recentRegistrations,
+          });
+        }
       }
     } catch (error: any) {
       console.error("Error loading user data:", error);
-      // Don't show error alert if we have cached data (better UX)
-      const cachedAgentData = await getCachedAgentData();
-      if (!cachedAgentData) {
-        Alert.alert("Error", "Failed to load user data. Please try again.");
+      // If offline or error, try to load from cache
+      const cachedDashboardData = await getCachedDashboardData();
+      if (cachedDashboardData) {
+        setAgentData(cachedDashboardData.agentData);
+        setBalance(cachedDashboardData.balance);
+        setTotalRegistered(cachedDashboardData.totalRegistered);
+        setTotalInstalled(cachedDashboardData.totalInstalled);
+        setRecentRegistrations(cachedDashboardData.recentRegistrations);
+      } else {
+        const cachedAgentData = await getCachedAgentData();
+        if (!cachedAgentData) {
+          Alert.alert("Error", "Failed to load user data. Please try again.");
+        }
       }
     } finally {
       setIsLoading(false);
@@ -294,10 +430,17 @@ export default function DashboardScreen() {
     try {
       setIsLoadingRegistrations(true);
 
-      // Fetch customer registrations
+      const online = await isOnline();
+      
+      // If offline, don't try to fetch
+      if (!online) {
+        return;
+      }
+
+      // Fetch customer registrations (include MS Forms submission status)
       const { data: registrations, error: regError } = await supabase
         .from("customer_registrations")
-        .select("id, customer_name, status, created_at")
+        .select("id, customer_name, status, created_at, ms_forms_response_id, ms_forms_submitted_at")
         .eq("agent_id", agentId)
         .order("created_at", { ascending: false })
         .limit(10);
@@ -305,7 +448,45 @@ export default function DashboardScreen() {
       if (regError) {
         console.error("Error loading registrations:", regError);
       } else {
-        setRecentRegistrations(registrations || []);
+        // Check for pending offline registrations and merge status
+        const pending = await getPendingRegistrations(agentId);
+        const pendingIds = new Set(pending.map(p => p.id));
+        setPendingSyncRegistrations(pendingIds);
+        
+        // Enhance registrations with sync status
+        const enhancedRegistrations = (registrations || []).map((reg: any) => {
+          const hasMSFormsId = !!reg.ms_forms_response_id;
+          const hasMSFormsSubmittedAt = !!reg.ms_forms_submitted_at;
+          
+          // Determine sync status
+          let syncStatus: "synced" | "pending" | "not_synced" = "not_synced";
+          
+          if (hasMSFormsId && hasMSFormsSubmittedAt) {
+            // Successfully synced to both Supabase and MS Forms
+            syncStatus = "synced";
+          } else if (!hasMSFormsId) {
+            // Not synced to MS Forms yet
+            // Check if it was created recently (might be syncing)
+            const createdAt = reg.created_at ? new Date(reg.created_at).getTime() : 0;
+            const now = Date.now();
+            const fiveMinutesAgo = now - 5 * 60 * 1000; // 5 minutes
+            
+            if (createdAt > fiveMinutesAgo) {
+              // Recently created, likely pending sync
+              syncStatus = "pending";
+            } else {
+              // Older registration without MS Forms ID - not synced
+              syncStatus = "not_synced";
+            }
+          }
+          
+          return {
+            ...reg,
+            syncStatus,
+          };
+        });
+        
+        setRecentRegistrations(enhancedRegistrations);
       }
 
       // Calculate stats
@@ -328,9 +509,16 @@ export default function DashboardScreen() {
         setTotalInstalled(totalInstalled);
       }
 
-      // Balance and total_earnings are now loaded from the agents table
-      // They are automatically updated by database triggers when status changes
-      // No need to calculate here - already set from agent data above
+      // Save to cache when online
+      if (online && agentData) {
+        await saveDashboardDataToCache({
+          agentData,
+          balance: balance ?? 0,
+          totalRegistered: totalRegistered ?? 0,
+          totalInstalled: totalInstalled ?? 0,
+          recentRegistrations: recentRegistrations,
+        });
+      }
     } catch (error) {
       console.error("Error loading customer data:", error);
     } finally {
@@ -367,23 +555,81 @@ export default function DashboardScreen() {
   });
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor="#0066CC"
-            colors={["#0066CC"]}
-          />
-        }
-      >
-        {/* Header */}
-        <View style={styles.header}>
-          {/* Left: Profile Icon Button */}
-          <TouchableOpacity
+    <>
+      {/* Toast Notification */}
+      <Toast
+        visible={toastVisible}
+        message={toastMessage}
+        type={toastType}
+        duration={toastType === "info" ? 0 : 3000}
+        onHide={() => setToastVisible(false)}
+      />
+      <View style={styles.container}>
+        {/* Agent Status Banner - Top */}
+        {agentData?.status && (
+          <View
+            style={[
+              styles.statusBanner,
+              { paddingTop: insets.top + 4 },
+              agentData.status === "approved" && styles.statusBannerApproved,
+              agentData.status === "pending" && styles.statusBannerPending,
+              agentData.status === "banned" && styles.statusBannerSuspended,
+              agentData.status === "rejected" && styles.statusBannerRejected,
+            ]}
+          >
+            {agentData.status === "approved" && (
+              <Text style={styles.statusBannerIcon}>✓</Text>
+            )}
+            {agentData.status === "pending" && (
+              <Text style={styles.statusBannerIcon}>⏳</Text>
+            )}
+            {agentData.status === "banned" && (
+              <Text style={styles.statusBannerIcon}>⚠</Text>
+            )}
+            {agentData.status === "rejected" && (
+              <Text style={styles.statusBannerIcon}>✗</Text>
+            )}
+            <Text
+              style={[
+                styles.statusBannerText,
+                agentData.status === "approved" && styles.statusBannerTextApproved,
+                agentData.status === "pending" && styles.statusBannerTextPending,
+                agentData.status === "banned" && styles.statusBannerTextSuspended,
+                agentData.status === "rejected" && styles.statusBannerTextRejected,
+              ]}
+            >
+              {agentData.status === "approved" && "Account Active"}
+              {agentData.status === "pending" && "Awaiting Approval"}
+              {agentData.status === "banned" && "Account Suspended"}
+              {agentData.status === "rejected" && "Application Rejected"}
+            </Text>
+          </View>
+        )}
+        
+        {/* Offline Indicator */}
+        {isOffline && (
+          <View style={styles.offlineBanner}>
+            <Text style={styles.offlineText}>📴 Offline - Showing cached data</Text>
+          </View>
+        )}
+        
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor="#0066CC"
+              colors={["#0066CC"]}
+            />
+          }
+        >
+          {/* Header */}
+          <View style={styles.header}>
+          <View style={styles.headerContent}>
+            {/* Left: Profile Icon Button */}
+            <TouchableOpacity
             style={styles.profileButton}
             onPress={handleProfilePress}
             activeOpacity={0.7}
@@ -415,7 +661,16 @@ export default function DashboardScreen() {
 
           {/* Left: Greeting and Name */}
           <View style={styles.greetingContainer}>
-            <Text style={styles.greeting}>{greeting}</Text>
+            <View style={styles.greetingRow}>
+              <Text style={styles.greeting}>{greeting}</Text>
+              {/* Online/Offline Status */}
+              <View style={[styles.statusIndicator, isOffline ? styles.statusIndicatorOffline : styles.statusIndicatorOnline]}>
+                <View style={[styles.statusDot, isOffline ? styles.statusDotOffline : styles.statusDotOnline]} />
+                <Text style={[styles.statusText, isOffline ? styles.statusTextOffline : styles.statusTextOnline]}>
+                  {isOffline ? "Offline" : "Online"}
+                </Text>
+              </View>
+            </View>
             <Text style={styles.name}>{name}</Text>
           </View>
 
@@ -440,6 +695,7 @@ export default function DashboardScreen() {
               )}
             </View>
           </TouchableOpacity>
+          </View>
         </View>
 
         {/* Divider */}
@@ -496,8 +752,7 @@ export default function DashboardScreen() {
           {recentRegistrations.length > 0 && (
             <TouchableOpacity
               onPress={() => {
-                // Navigate to all registrations view
-                console.log("View all registrations");
+                router.push("/registrations" as any);
               }}
               activeOpacity={0.7}
             >
@@ -533,6 +788,21 @@ export default function DashboardScreen() {
                         ? new Date(registration.created_at).toLocaleDateString()
                         : "N/A"}
                     </Text>
+                    {/* Sync Status Indicator */}
+                    {registration.syncStatus && (
+                      <View style={styles.syncStatusContainer}>
+                        <Text style={[
+                          styles.syncStatusText,
+                          registration.syncStatus === "synced" && styles.syncStatusSynced,
+                          registration.syncStatus === "pending" && styles.syncStatusPending,
+                          registration.syncStatus === "not_synced" && styles.syncStatusUnknown,
+                        ]}>
+                          {registration.syncStatus === "synced" && "✅ Synced"}
+                          {registration.syncStatus === "pending" && "⏳ Pending Sync"}
+                          {registration.syncStatus === "not_synced" && "❌ Not Synced"}
+                        </Text>
+                      </View>
+                    )}
                   </View>
                   <View
                     style={[
@@ -568,8 +838,9 @@ export default function DashboardScreen() {
             </Text>
           </View>
         )}
-      </ScrollView>
-    </View>
+        </ScrollView>
+      </View>
+    </>
   );
 }
 
@@ -590,14 +861,20 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingHorizontal: 10,
-    paddingTop: 20,
+    paddingTop: 0,
     paddingBottom: 40,
   },
   header: {
+    backgroundColor: "#FFFFFF",
+    borderBottomWidth: 1,
+    borderBottomColor: "#E0E0E0",
+  },
+  headerContent: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 16,
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
   },
   divider: {
     height: 1,
@@ -809,6 +1086,35 @@ const styles = StyleSheet.create({
   registrationStatusTextApproved: {
     color: "#2196F3",
   },
+  syncStatusContainer: {
+    marginTop: 4,
+  },
+  syncStatusText: {
+    fontSize: 11,
+    fontFamily: "Inter_400Regular",
+    letterSpacing: 0.2,
+  },
+  syncStatusSynced: {
+    color: "#4CAF50",
+  },
+  syncStatusPending: {
+    color: "#FF9800",
+  },
+  syncStatusUnknown: {
+    color: "#999999",
+  },
+  offlineBanner: {
+    backgroundColor: "#FF9800",
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  offlineText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+  },
   emptyState: {
     backgroundColor: "#FFFFFF",
     borderRadius: 12,
@@ -840,18 +1146,154 @@ const styles = StyleSheet.create({
     flex: 1,
     marginLeft: 12,
   },
+  greetingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 2,
+  },
   greeting: {
     fontSize: 12,
     fontFamily: "Inter_400Regular",
     color: "#666666",
-    marginBottom: 2,
     letterSpacing: 0.2,
+    marginRight: 8,
+  },
+  statusIndicator: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 12,
+    backgroundColor: "#F0F0F0",
+  },
+  statusIndicatorOnline: {
+    backgroundColor: "#E8F5E9",
+  },
+  statusIndicatorOffline: {
+    backgroundColor: "#FFF3E0",
+  },
+  statusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginRight: 4,
+  },
+  statusDotOnline: {
+    backgroundColor: "#4CAF50",
+  },
+  statusDotOffline: {
+    backgroundColor: "#FF9800",
+  },
+  statusText: {
+    fontSize: 10,
+    fontFamily: "Inter_500Medium",
+  },
+  statusTextOnline: {
+    color: "#2E7D32",
+  },
+  statusTextOffline: {
+    color: "#E65100",
   },
   name: {
     fontSize: 18,
     fontFamily: "Poppins_600SemiBold",
     color: "#333333",
     letterSpacing: 0.3,
+    marginTop: 4,
+  },
+  statusBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingBottom: 8,
+    paddingHorizontal: 16,
+    gap: 8,
+  },
+  statusBannerApproved: {
+    backgroundColor: "#E8F5E9",
+  },
+  statusBannerPending: {
+    backgroundColor: "#FFF4E6",
+  },
+  statusBannerSuspended: {
+    backgroundColor: "#FFEBEE",
+  },
+  statusBannerRejected: {
+    backgroundColor: "#F5F5F5",
+  },
+  statusBannerIcon: {
+    fontSize: 16,
+  },
+  statusBannerText: {
+    fontSize: 13,
+    fontFamily: "Inter_500Medium",
+    letterSpacing: 0.2,
+  },
+  statusBannerTextApproved: {
+    color: "#2E7D32",
+  },
+  statusBannerTextPending: {
+    color: "#E65100",
+  },
+  statusBannerTextSuspended: {
+    color: "#C62828",
+  },
+  statusBannerTextRejected: {
+    color: "#616161",
+  },
+  agentStatusContainer: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 12,
+    alignItems: "center",
+  },
+  agentStatusBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    gap: 8,
+  },
+  agentStatusBadgeApproved: {
+    backgroundColor: "#E8F5E9",
+    borderWidth: 1,
+    borderColor: "#C8E6C9",
+  },
+  agentStatusBadgePending: {
+    backgroundColor: "#FFF4E6",
+    borderWidth: 1,
+    borderColor: "#FFE0B2",
+  },
+  agentStatusBadgeSuspended: {
+    backgroundColor: "#FFEBEE",
+    borderWidth: 1,
+    borderColor: "#FFCDD2",
+  },
+  agentStatusBadgeRejected: {
+    backgroundColor: "#F5F5F5",
+    borderWidth: 1,
+    borderColor: "#E0E0E0",
+  },
+  agentStatusIcon: {
+    fontSize: 14,
+  },
+  agentStatusText: {
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+    letterSpacing: 0.2,
+  },
+  agentStatusTextApproved: {
+    color: "#2E7D32",
+  },
+  agentStatusTextPending: {
+    color: "#E65100",
+  },
+  agentStatusTextSuspended: {
+    color: "#C62828",
+  },
+  agentStatusTextRejected: {
+    color: "#616161",
   },
   profileButton: {
     marginRight: 0,

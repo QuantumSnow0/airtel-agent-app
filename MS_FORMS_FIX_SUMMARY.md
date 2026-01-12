@@ -98,3 +98,8 @@ const result = await registerCustomerToMSForms(customerData, agentData);
 - All cookie handling now happens server-side in the Edge Function
 - The Edge Function uses the same payload building logic to ensure consistency
 
+## Related Documentation
+
+- See **[PROJECT_UPDATES.md](./PROJECT_UPDATES.md)** for latest project updates and features
+- See **[SUPABASE_EDGE_FUNCTION_SETUP.md](./SUPABASE_EDGE_FUNCTION_SETUP.md)** for detailed setup instructions
+
