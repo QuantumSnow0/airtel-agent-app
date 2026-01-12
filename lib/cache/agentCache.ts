@@ -18,6 +18,8 @@ export interface CachedAgentData {
   status: string;
   created_at: string;
   updated_at: string;
+  total_earnings?: number | null;
+  available_balance?: number | null;
 }
 
 /**

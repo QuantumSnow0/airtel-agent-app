@@ -1,33 +1,34 @@
 import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  Alert,
-  ActivityIndicator,
-  TouchableOpacity,
-  Animated,
-} from "react-native";
-import { useRouter } from "expo-router";
-import { useFonts } from "expo-font";
-import { useEffect, useState, useRef } from "react";
-import {
-  Poppins_600SemiBold,
-  Poppins_700Bold,
-} from "@expo-google-fonts/poppins";
-import {
-  Inter_400Regular,
-  Inter_500Medium,
-  Inter_600SemiBold,
+    Inter_400Regular,
+    Inter_500Medium,
+    Inter_600SemiBold,
 } from "@expo-google-fonts/inter";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { supabase } from "../lib/supabase";
 import {
-  getCachedAgentData,
-  saveAgentDataToCache,
-  clearAgentDataCache,
-  CachedAgentData,
+    Poppins_600SemiBold,
+    Poppins_700Bold,
+} from "@expo-google-fonts/poppins";
+import { useFonts } from "expo-font";
+import { useRouter } from "expo-router";
+import { useEffect, useRef, useState } from "react";
+import {
+    ActivityIndicator,
+    Alert,
+    Animated,
+    RefreshControl,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import {
+    CachedAgentData,
+    clearAgentDataCache,
+    getCachedAgentData,
+    saveAgentDataToCache,
 } from "../lib/cache/agentCache";
+import { supabase } from "../lib/supabase";
 
 // Helper function to get time-based greeting
 const getTimeBasedGreeting = (): string => {
@@ -65,6 +66,7 @@ export default function DashboardScreen() {
   const [totalInstalled, setTotalInstalled] = useState(0);
   const [recentRegistrations, setRecentRegistrations] = useState<any[]>([]);
   const [isLoadingRegistrations, setIsLoadingRegistrations] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const spinValue = useRef(new Animated.Value(0)).current;
 
   const [fontsLoaded] = useFonts({
@@ -94,6 +96,82 @@ export default function DashboardScreen() {
       authListener.subscription.unsubscribe();
     };
   }, []);
+
+  // Real-time subscription for agent balance updates
+  useEffect(() => {
+    if (!user?.id) return;
+
+    console.log("🔴 Setting up real-time subscription for agent:", user.id);
+
+    // Subscribe to changes in the agents table for this specific agent
+    const balanceChannel = supabase
+      .channel(`agent-balance-${user.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "agents",
+          filter: `id=eq.${user.id}`,
+        },
+        (payload) => {
+          console.log("🟢 Real-time balance update received:", payload);
+          const updatedAgent = payload.new as CachedAgentData;
+          
+          // Update agent data
+          setAgentData(updatedAgent);
+          saveAgentDataToCache(updatedAgent);
+          
+          // Update balance if it changed
+          if (updatedAgent.available_balance !== undefined && updatedAgent.available_balance !== null) {
+            setBalance(updatedAgent.available_balance);
+            console.log("💰 Balance updated:", updatedAgent.available_balance);
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log("📡 Balance subscription status:", status);
+      });
+
+    return () => {
+      console.log("🔴 Unsubscribing from balance updates");
+      supabase.removeChannel(balanceChannel);
+    };
+  }, [user?.id]);
+
+  // Real-time subscription for customer registrations (status updates)
+  useEffect(() => {
+    if (!user?.id) return;
+
+    console.log("🔴 Setting up real-time subscription for registrations:", user.id);
+
+    // Subscribe to changes in customer_registrations for this agent
+    const registrationsChannel = supabase
+      .channel(`agent-registrations-${user.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*", // Listen to INSERT, UPDATE, DELETE
+          schema: "public",
+          table: "customer_registrations",
+          filter: `agent_id=eq.${user.id}`,
+        },
+        async (payload) => {
+          console.log("🟢 Real-time registration update received:", payload.eventType, payload);
+          
+          // Reload customer data to get updated statuses and counts
+          await loadCustomerData(user.id);
+        }
+      )
+      .subscribe((status) => {
+        console.log("📡 Registrations subscription status:", status);
+      });
+
+    return () => {
+      console.log("🔴 Unsubscribing from registration updates");
+      supabase.removeChannel(registrationsChannel);
+    };
+  }, [user?.id]);
 
   // Animate hourglass rotation when pending
   useEffect(() => {
@@ -159,6 +237,7 @@ export default function DashboardScreen() {
       }
 
       // Fetch fresh agent data from database (background fetch)
+      // Include balance and earnings columns
       const { data: agent, error: agentError } = await supabase
         .from("agents")
         .select("*")
@@ -175,6 +254,11 @@ export default function DashboardScreen() {
         // Save fresh data to cache
         await saveAgentDataToCache(agent);
         setAgentData(agent);
+        
+        // Set balance and total earnings from database
+        // These are automatically updated by the database trigger
+        setBalance(agent.available_balance || 0);
+        // Note: total_earnings is used in the UI calculation below
       }
 
       // Load customer registrations data
@@ -190,6 +274,18 @@ export default function DashboardScreen() {
       }
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  // Refresh all data (for pull-to-refresh)
+  const onRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await loadUserData();
+    } catch (error) {
+      console.error("Error refreshing data:", error);
+    } finally {
+      setRefreshing(false);
     }
   };
 
@@ -232,9 +328,9 @@ export default function DashboardScreen() {
         setTotalInstalled(totalInstalled);
       }
 
-      // TODO: Calculate balance from commissions
-      // For now, balance is set to 0
-      setBalance(0);
+      // Balance and total_earnings are now loaded from the agents table
+      // They are automatically updated by database triggers when status changes
+      // No need to calculate here - already set from agent data above
     } catch (error) {
       console.error("Error loading customer data:", error);
     } finally {
@@ -275,6 +371,14 @@ export default function DashboardScreen() {
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="#0066CC"
+            colors={["#0066CC"]}
+          />
+        }
       >
         {/* Header */}
         <View style={styles.header}>
@@ -349,6 +453,12 @@ export default function DashboardScreen() {
               <Text style={styles.balanceAmount}>
                 KSh {balance.toLocaleString()}
               </Text>
+              <View style={styles.totalEarningsContainer}>
+                <Text style={styles.totalEarningsLabel}>Total Earnings</Text>
+                <Text style={styles.totalEarningsAmount}>
+                  KSh {(agentData?.total_earnings ?? totalInstalled * 150).toLocaleString()}
+                </Text>
+              </View>
             </View>
             <View style={styles.balanceIconContainer}>
               <Text style={styles.balanceIcon}>💰</Text>
@@ -530,6 +640,25 @@ const styles = StyleSheet.create({
     fontFamily: "Poppins_700Bold",
     color: "#0066CC",
     letterSpacing: 0.3,
+  },
+  totalEarningsContainer: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: "#F0F0F0",
+  },
+  totalEarningsLabel: {
+    fontSize: 11,
+    fontFamily: "Inter_400Regular",
+    color: "#999999",
+    marginBottom: 4,
+    letterSpacing: 0.2,
+  },
+  totalEarningsAmount: {
+    fontSize: 18,
+    fontFamily: "Poppins_600SemiBold",
+    color: "#4CAF50",
+    letterSpacing: 0.2,
   },
   balanceIconContainer: {
     width: 48,
