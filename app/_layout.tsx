@@ -1,8 +1,15 @@
+import * as Linking from "expo-linking";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { useEffect, useState } from "react";
-import * as Linking from "expo-linking";
+import { ActivityIndicator, StyleSheet, View } from "react-native";
+import {
+    getDeviceToken,
+    getLastNotificationResponse,
+    registerDeviceToken,
+    requestNotificationPermissions,
+    setupNotificationListeners,
+} from "../lib/services/pushNotificationService";
 import { supabase } from "../lib/supabase";
-import { ActivityIndicator, View, StyleSheet } from "react-native";
 
 export default function RootLayout() {
   const [isInitializing, setIsInitializing] = useState(true);
@@ -61,6 +68,9 @@ export default function RootLayout() {
 
     // Handle deep links when app is already open
     const linkingSubscription = Linking.addEventListener("url", handleDeepLink);
+
+    // Setup push notifications
+    setupPushNotifications();
 
     // Check if app was opened via deep link (non-blocking)
     // Email verification links may contain "code=" or "verify-email"
@@ -174,6 +184,101 @@ export default function RootLayout() {
       console.error("Error handling auth change:", error);
       // On any error, just let user stay where they are or go to welcome
       // Individual screens will handle auth checks
+    }
+  };
+
+  const setupPushNotifications = async () => {
+    try {
+      // Request notification permissions
+      const hasPermission = await requestNotificationPermissions();
+      if (!hasPermission) {
+        console.log("⚠️ Notification permissions not granted");
+        return;
+      }
+
+      // Get device token
+      const token = await getDeviceToken();
+      if (!token) {
+        console.log("⚠️ Could not get device token");
+        return;
+      }
+
+      console.log("📱 Device token obtained:", token);
+
+      // Get current user
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (user) {
+        // Register token in database
+        await registerDeviceToken(user.id, token);
+        console.log("✅ Device token registered");
+      } else {
+        console.log("⚠️ No user logged in, token will be registered on login");
+      }
+
+      // Setup notification listeners
+      const cleanup = setupNotificationListeners(
+        // Foreground notification handler
+        (notification) => {
+          console.log("📬 Foreground notification:", notification);
+          // Notification is automatically shown by expo-notifications
+          // You can add custom handling here if needed
+        },
+        // Notification tap handler
+        (response) => {
+          console.log("👆 Notification tapped:", response);
+          handleNotificationTap(response);
+        }
+      );
+
+      // Check if app was opened from a notification
+      const lastResponse = await getLastNotificationResponse();
+      if (lastResponse) {
+        console.log("📱 App opened from notification");
+        handleNotificationTap(lastResponse);
+      }
+
+      // Cleanup on unmount
+      return cleanup;
+    } catch (error) {
+      console.error("Error setting up push notifications:", error);
+    }
+  };
+
+  const handleNotificationTap = (response: any) => {
+    const notification = response.notification;
+    const data = notification.request.content.data;
+
+    console.log("🔔 Handling notification tap:", data);
+
+    // Navigate based on notification type
+    if (data?.type) {
+      switch (data.type) {
+        case "REGISTRATION_STATUS_CHANGE":
+          if (data.relatedId) {
+            router.push("/registrations" as any);
+          }
+          break;
+        case "EARNINGS_UPDATE":
+          router.push("/dashboard" as any);
+          break;
+        case "ACCOUNT_STATUS_CHANGE":
+          router.push("/dashboard" as any);
+          break;
+        case "SYNC_FAILURE":
+          router.push("/registrations" as any);
+          break;
+        case "SYSTEM_ANNOUNCEMENT":
+          router.push("/notifications" as any);
+          break;
+        default:
+          router.push("/notifications" as any);
+      }
+    } else {
+      // Default: navigate to notifications
+      router.push("/notifications" as any);
     }
   };
 

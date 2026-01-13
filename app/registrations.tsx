@@ -25,6 +25,13 @@ import {
 } from "@expo-google-fonts/inter";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../lib/supabase";
+import {
+  scaleWidth,
+  scaleHeight,
+  scaleFont,
+  getResponsivePadding,
+  getCardPadding,
+} from "../lib/utils/responsive";
 import { getPendingRegistrations, initOfflineStorage } from "../lib/services/offlineStorage";
 import {
   syncRegistrationFromSupabase,

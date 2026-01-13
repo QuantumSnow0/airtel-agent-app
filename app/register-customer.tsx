@@ -29,6 +29,13 @@ import {
 } from "react-native-safe-area-context";
 import { supabase } from "../lib/supabase";
 import {
+  scaleWidth,
+  scaleHeight,
+  scaleFont,
+  getResponsivePadding,
+  getCardPadding,
+} from "../lib/utils/responsive";
+import {
   customerRegistrationSchema,
   CustomerRegistrationFormData,
 } from "../lib/validation/customerRegistrationSchemas";

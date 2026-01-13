@@ -1,6 +1,12 @@
 import { Text, View, StyleSheet, TouchableOpacity, Image, ActivityIndicator } from "react-native";
 import { useRouter } from "expo-router";
 import { useFonts } from "expo-font";
+import {
+  scaleWidth,
+  scaleHeight,
+  scaleFont,
+  getResponsivePadding,
+} from "../lib/utils/responsive";
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import {

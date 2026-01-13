@@ -6,6 +6,7 @@ import {
   PendingRegistration,
 } from "./offlineStorage";
 import { registerCustomerToMSForms } from "./msFormsService";
+import { createSyncFailureNotification } from "./notificationService";
 
 export interface SyncResult {
   success: boolean;
@@ -115,6 +116,18 @@ async function syncSingleRegistration(
   } catch (error: any) {
     const errorMessage = error.message || "Unknown error";
     console.error(`❌ Failed to sync registration ${registration.id}:`, errorMessage);
+
+    // Create SYNC_FAILURE notification
+    // Only create notification if this is a final failure (after retries) or first failure
+    if (registration.retry_count >= 2) {
+      // Final failure - create notification
+      await createSyncFailureNotification(
+        registration.agent_id,
+        registration.customerData.customerName,
+        dbRegistration?.id,
+        errorMessage
+      );
+    }
 
     // Update status to failed if retry count < 3
     if (registration.retry_count < 3) {
@@ -316,6 +329,15 @@ export async function syncRegistrationFromSupabase(
       return { success: true };
     } else {
       console.error("❌ MS Forms submission failed:", msFormsResult.error);
+      
+      // Create SYNC_FAILURE notification
+      await createSyncFailureNotification(
+        registration.agent_id,
+        registration.customer_name,
+        registrationId,
+        msFormsResult.error || "Microsoft Forms submission failed"
+      );
+      
       return {
         success: false,
         error: msFormsResult.error || "Microsoft Forms submission failed",

@@ -1,42 +1,49 @@
 import {
-  Inter_400Regular,
-  Inter_500Medium,
-  Inter_600SemiBold,
+    Inter_400Regular,
+    Inter_500Medium,
+    Inter_600SemiBold,
 } from "@expo-google-fonts/inter";
 import {
-  Poppins_600SemiBold,
-  Poppins_700Bold,
+    Poppins_600SemiBold,
+    Poppins_700Bold,
 } from "@expo-google-fonts/poppins";
 import { useFonts } from "expo-font";
 import { useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
-  ActivityIndicator,
-  Alert,
-  Animated,
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
+    ActivityIndicator,
+    Alert,
+    Animated,
+    RefreshControl,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Toast } from "../components/Toast";
 import {
-  CachedAgentData,
-  clearAgentDataCache,
-  getCachedAgentData,
-  saveAgentDataToCache,
+    CachedAgentData,
+    clearAgentDataCache,
+    getCachedAgentData,
+    saveAgentDataToCache,
 } from "../lib/cache/agentCache";
 import {
-  clearDashboardDataCache,
-  getCachedDashboardData,
-  saveDashboardDataToCache,
+    clearDashboardDataCache,
+    getCachedDashboardData,
+    saveDashboardDataToCache,
 } from "../lib/cache/dashboardCache";
 import { getPendingRegistrations, initOfflineStorage } from "../lib/services/offlineStorage";
 import { isOnline, setupAutoSync } from "../lib/services/syncService";
 import { supabase } from "../lib/supabase";
+import {
+    getCardPadding,
+    getResponsivePadding,
+    scaleFont,
+    scaleHeight,
+    scaleWidth
+} from "../lib/utils/responsive";
 
 // Helper function to get time-based greeting
 const getTimeBasedGreeting = (): string => {
@@ -69,6 +76,33 @@ export default function DashboardScreen() {
   const [agentData, setAgentData] = useState<CachedAgentData | null>(null);
   const [greeting, setGreeting] = useState("Good morning,");
   const [unreadNotifications, setUnreadNotifications] = useState(0);
+  
+  // Load unread notification count
+  const loadUnreadNotificationCount = async (agentId: string) => {
+    try {
+      const { count, error } = await supabase
+        .from("notifications")
+        .select("*", { count: "exact", head: true })
+        .eq("agent_id", agentId)
+        .eq("is_read", false);
+
+      if (error) {
+        console.error("Error loading unread notification count:", error);
+        return;
+      }
+
+      if (count !== null) {
+        console.log("📊 Unread notifications count:", count);
+        setUnreadNotifications(count);
+      } else {
+        console.log("📊 No unread notifications");
+        setUnreadNotifications(0);
+      }
+    } catch (error) {
+      console.error("Error loading unread notification count:", error);
+      setUnreadNotifications(0);
+    }
+  };
   const [balance, setBalance] = useState(0); // Agent commission balance
   const [totalRegistered, setTotalRegistered] = useState(0);
   const [totalInstalled, setTotalInstalled] = useState(0);
@@ -99,6 +133,25 @@ export default function DashboardScreen() {
     setGreeting(getTimeBasedGreeting());
     initOfflineStorage();
     loadUserData();
+    
+    // Also load notification count on mount
+    const loadInitialNotificationCount = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        await loadUnreadNotificationCount(user.id);
+        
+        // Register device token for push notifications
+        const { requestNotificationPermissions, getDeviceToken, registerDeviceToken } = await import("../lib/services/pushNotificationService");
+        const hasPermission = await requestNotificationPermissions();
+        if (hasPermission) {
+          const token = await getDeviceToken();
+          if (token) {
+            await registerDeviceToken(user.id, token);
+          }
+        }
+      }
+    };
+    loadInitialNotificationCount();
 
     // Listen for auth state changes (logout, etc.)
     const { data: authListener } = supabase.auth.onAuthStateChange(
@@ -155,10 +208,10 @@ export default function DashboardScreen() {
           filter: `id=eq.${user.id}`,
         },
         (payload) => {
-          console.log("🟢 Real-time balance update received:", payload);
+          console.log("🟢 Real-time agent update received:", payload);
           const updatedAgent = payload.new as CachedAgentData;
           
-          // Update agent data
+          // Update agent data (includes status, balance, earnings, etc.)
           setAgentData(updatedAgent);
           saveAgentDataToCache(updatedAgent);
           
@@ -166,6 +219,11 @@ export default function DashboardScreen() {
           if (updatedAgent.available_balance !== undefined && updatedAgent.available_balance !== null) {
             setBalance(updatedAgent.available_balance);
             console.log("💰 Balance updated:", updatedAgent.available_balance);
+          }
+          
+          // Log status change if it occurred
+          if (payload.old && payload.old.status !== updatedAgent.status) {
+            console.log("🔄 Agent status changed:", payload.old.status, "→", updatedAgent.status);
           }
         }
       )
@@ -207,9 +265,49 @@ export default function DashboardScreen() {
         console.log("📡 Registrations subscription status:", status);
       });
 
+    // Subscribe to notifications for real-time updates
+    const notificationsChannel = supabase
+      .channel(`agent-notifications-${user.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*", // Listen to INSERT, UPDATE, DELETE
+          schema: "public",
+          table: "notifications",
+          filter: `agent_id=eq.${user.id}`,
+        },
+        async (payload) => {
+          console.log("🔔 Notification update received:", payload.eventType, payload);
+          
+          // Handle different event types
+          if (payload.eventType === "INSERT") {
+            console.log("🆕 New notification inserted:", payload.new);
+            // New notification - reload count
+            await loadUnreadNotificationCount(user.id);
+          } else if (payload.eventType === "UPDATE") {
+            console.log("🔄 Notification updated:", payload.new);
+            // Notification marked as read or updated - reload count
+            await loadUnreadNotificationCount(user.id);
+          } else if (payload.eventType === "DELETE") {
+            console.log("🗑️ Notification deleted");
+            // Notification deleted - reload count
+            await loadUnreadNotificationCount(user.id);
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log("📡 Notifications subscription status:", status);
+        if (status === "SUBSCRIBED") {
+          console.log("✅ Successfully subscribed to notifications");
+        } else if (status === "CHANNEL_ERROR") {
+          console.error("❌ Error subscribing to notifications");
+        }
+      });
+
     return () => {
       console.log("🔴 Unsubscribing from registration updates");
       supabase.removeChannel(registrationsChannel);
+      supabase.removeChannel(notificationsChannel);
     };
   }, [user?.id]);
 
@@ -389,9 +487,10 @@ export default function DashboardScreen() {
         // Note: total_earnings is used in the UI calculation below
       }
 
-      // Load customer registrations data
+      // Load customer registrations data and notification count
       if (currentUser && online) {
         await loadCustomerData(currentUser.id);
+        await loadUnreadNotificationCount(currentUser.id);
         
         // Save complete dashboard data to cache after all data is loaded
         if (agentData) {
@@ -745,8 +844,7 @@ export default function DashboardScreen() {
           <TouchableOpacity
             style={styles.notificationButton}
             onPress={() => {
-              // Notification logic - to be implemented later
-              console.log("Notification button pressed");
+              router.push("/notifications" as any);
             }}
             activeOpacity={0.7}
           >
@@ -945,11 +1043,16 @@ export default function DashboardScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#F5F7FA",
-  },
+// Create responsive styles
+const createStyles = () => {
+  const responsivePadding = getResponsivePadding();
+  const cardPadding = getCardPadding();
+  
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: "#F5F7FA",
+    },
   loadingContainer: {
     justifyContent: "center",
     alignItems: "center",
@@ -1051,14 +1154,14 @@ const styles = StyleSheet.create({
   },
   statsContainer: {
     flexDirection: "row",
-    gap: 12,
-    marginBottom: 20,
+    gap: scaleWidth(12),
+    marginBottom: scaleHeight(20),
   },
   statCard: {
     flex: 1,
     backgroundColor: "#FFFFFF",
-    borderRadius: 12,
-    padding: 16,
+    borderRadius: scaleWidth(12),
+    padding: cardPadding,
     shadowColor: "#000000",
     shadowOffset: {
       width: 0,
@@ -1071,23 +1174,23 @@ const styles = StyleSheet.create({
     borderColor: "#F0F0F0",
   },
   statLabel: {
-    fontSize: 12,
+    fontSize: scaleFont(12),
     fontFamily: "Inter_400Regular",
     color: "#999999",
-    marginBottom: 8,
+    marginBottom: scaleHeight(8),
     letterSpacing: 0.2,
     textAlign: "center",
   },
   statValue: {
-    fontSize: 24,
+    fontSize: scaleFont(24),
     fontFamily: "Poppins_700Bold",
     color: "#333333",
     letterSpacing: 0.3,
     textAlign: "center",
   },
   statBreakdown: {
-    marginTop: 12,
-    paddingTop: 12,
+    marginTop: scaleHeight(12),
+    paddingTop: scaleHeight(12),
     borderTopWidth: 1,
     borderTopColor: "#E0E0E0",
   },
@@ -1101,15 +1204,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   statBreakdownLabel: {
-    fontSize: 10,
+    fontSize: scaleFont(10),
     fontFamily: "Inter_400Regular",
     color: "#999999",
-    marginBottom: 4,
+    marginBottom: scaleHeight(4),
     textTransform: "uppercase",
     letterSpacing: 0.5,
   },
   statBreakdownValue: {
-    fontSize: 18,
+    fontSize: scaleFont(18),
     fontFamily: "Poppins_600SemiBold",
   },
   statBreakdownPremium: {
@@ -1120,18 +1223,18 @@ const styles = StyleSheet.create({
   },
   statBreakdownDivider: {
     width: 1,
-    height: 30,
+    height: scaleHeight(30),
     backgroundColor: "#E0E0E0",
-    marginHorizontal: 8,
+    marginHorizontal: scaleWidth(8),
   },
   registerButton: {
     backgroundColor: "#0066CC",
-    borderRadius: 12,
-    paddingVertical: 16,
-    paddingHorizontal: 24,
+    borderRadius: scaleWidth(12),
+    paddingVertical: scaleHeight(16),
+    paddingHorizontal: responsivePadding,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 24,
+    marginBottom: scaleHeight(24),
     shadowColor: "#0066CC",
     shadowOffset: {
       width: 0,
@@ -1513,4 +1616,7 @@ const styles = StyleSheet.create({
     flex: 1,
     // Empty for now - content will be added later
   },
-});
+  });
+};
+
+const styles = createStyles();
