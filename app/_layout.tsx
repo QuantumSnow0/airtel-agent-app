@@ -2,6 +2,7 @@ import * as Linking from "expo-linking";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
+import { checkAppVersion } from "../lib/services/appVersionService";
 import {
     getDeviceToken,
     getLastNotificationResponse,
@@ -13,6 +14,8 @@ import { supabase } from "../lib/supabase";
 
 export default function RootLayout() {
   const [isInitializing, setIsInitializing] = useState(true);
+  const [needsUpdate, setNeedsUpdate] = useState(false);
+  const [isBlocked, setIsBlocked] = useState(false);
   const router = useRouter();
   const segments = useSegments();
 
@@ -28,25 +31,50 @@ export default function RootLayout() {
       }
     }, 1000); // 1 second absolute maximum
 
+    // Check app version first (before session check)
+    checkAppVersion()
+      .then((versionCheck) => {
+        if (isMounted) {
+          if (versionCheck.isBlocked) {
+            // App version is too old and force update is enabled
+            console.log("🚫 App version blocked - update required");
+            setNeedsUpdate(true);
+            setIsBlocked(true);
+            setIsInitializing(false);
+            router.replace("/update-required" as any);
+            return;
+          } else if (versionCheck.needsUpdate) {
+            // Update available but not forced
+            console.log("📱 App update available (not forced)");
+            setNeedsUpdate(true);
+            // Continue with app, but you could show a non-blocking banner
+          }
+        }
+      })
+      .catch((error) => {
+        console.error("Version check error:", error);
+        // On error, allow app to continue
+      });
+
     // Try to get session quickly in parallel (don't wait for it)
     // If it completes quickly, clear loading early. Otherwise, maxLoadTimer will handle it.
     checkSession()
       .then(() => {
-        if (isMounted) {
+        if (isMounted && !isBlocked) {
           clearTimeout(maxLoadTimer);
           setIsInitializing(false);
         }
       })
       .catch((error) => {
         console.error("Session check error:", error);
-        if (isMounted) {
+        if (isMounted && !isBlocked) {
           clearTimeout(maxLoadTimer);
           setIsInitializing(false);
         }
       })
       .finally(() => {
         // Ensure loading is cleared even if timer already fired
-        if (isMounted) {
+        if (isMounted && !isBlocked) {
           clearTimeout(maxLoadTimer);
         }
       });
