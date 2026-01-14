@@ -31,28 +31,52 @@ serve(async (req) => {
   }
 
   try {
+    // Log request details for debugging
+    console.log("📥 Edge Function called");
+    console.log("Method:", req.method);
+    console.log("URL:", req.url);
+    const authHeader = req.headers.get("authorization");
+    console.log("Has Authorization header:", !!authHeader);
+
     // Get Supabase client with service role
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    
+    if (!supabaseServiceKey) {
+      console.error("❌ SUPABASE_SERVICE_ROLE_KEY not set in Edge Function secrets");
+    }
+    
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     // Parse request body
-    // Supabase webhooks send data in format: { type, table, schema, record, old_record }
-    const webhookData = await req.json() as {
-      type?: string;
-      table?: string;
-      record?: NotificationData;
-      notification?: NotificationData; // Fallback for custom format
-    };
+    const rawBody = await req.text();
+    console.log("📦 Raw request body:", rawBody.substring(0, 500)); // Log first 500 chars
+    
+    let webhookData: any;
+    try {
+      webhookData = JSON.parse(rawBody);
+    } catch (e) {
+      console.error("❌ Failed to parse request body as JSON:", e);
+      return new Response(
+        JSON.stringify({ error: "Invalid JSON in request body" }),
+        {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+    }
 
-    // Extract notification data from webhook payload
-    // Supabase webhooks send it as "record", but we also support custom "notification" format
+    console.log("📋 Parsed webhook data:", JSON.stringify(webhookData, null, 2));
+
+    // Supabase webhooks send data in format: { type, table, schema, record, old_record }
+    // Database triggers might send: { notification: {...} }
     const notification = webhookData.record || webhookData.notification;
 
     if (!notification || !notification.agent_id) {
-      console.error("❌ Invalid webhook payload:", webhookData);
+      console.error("❌ Invalid webhook payload - missing notification or agent_id");
+      console.error("Full payload:", JSON.stringify(webhookData, null, 2));
       return new Response(
-        JSON.stringify({ error: "Missing notification or agent_id" }),
+        JSON.stringify({ error: "Missing notification or agent_id", received: webhookData }),
         {
           status: 400,
           headers: { "Content-Type": "application/json" },
@@ -108,8 +132,10 @@ serve(async (req) => {
     }));
 
     console.log(`📱 Sending ${pushNotifications.length} push notification(s)`);
+    console.log("📤 Push notification payload:", JSON.stringify(pushNotifications, null, 2));
 
     // Send push notifications via Expo Push API
+    console.log("🌐 Calling Expo Push API...");
     const response = await fetch(EXPO_PUSH_API_URL, {
       method: "POST",
       headers: {
@@ -120,7 +146,10 @@ serve(async (req) => {
       body: JSON.stringify(pushNotifications),
     });
 
+    console.log("📡 Expo Push API response status:", response.status, response.statusText);
+    
     const result = await response.json();
+    console.log("📥 Expo Push API response:", JSON.stringify(result, null, 2));
 
     if (!response.ok) {
       console.error("❌ Expo Push API error:", result);
@@ -131,6 +160,17 @@ serve(async (req) => {
           headers: { "Content-Type": "application/json" },
         }
       );
+    }
+
+    // Check if Expo returned any errors in the response
+    if (result.data && Array.isArray(result.data)) {
+      result.data.forEach((receipt: any, index: number) => {
+        if (receipt.status === "error") {
+          console.error(`❌ Push notification ${index + 1} failed:`, receipt.message, receipt.details);
+        } else {
+          console.log(`✅ Push notification ${index + 1} sent successfully:`, receipt.id);
+        }
+      });
     }
 
     console.log("✅ Push notifications sent successfully:", result);

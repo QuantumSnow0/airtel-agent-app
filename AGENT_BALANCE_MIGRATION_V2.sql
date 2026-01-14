@@ -109,3 +109,6 @@ COMMENT ON COLUMN public.agents.available_balance IS 'Current withdrawable balan
 --   (SELECT COUNT(*) FILTER (WHERE preferred_package = 'standard' AND status = 'installed') FROM customer_registrations WHERE agent_id = agents.id) as standard_installed
 -- FROM agents;
 
+
+
+

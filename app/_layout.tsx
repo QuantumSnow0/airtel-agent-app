@@ -79,26 +79,38 @@ export default function RootLayout() {
         }
       });
 
-    // Listen for auth state changes (for logout events only)
-    // Note: Only handle SIGNED_OUT - initial load handles other events
+    // Listen for auth state changes
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, session) => {
-      // Only handle logout - this happens after app is loaded anyway
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === "SIGNED_OUT") {
         console.log("User signed out - redirecting to welcome");
         // Small delay to ensure router is ready
         setTimeout(() => {
           router.replace("/" as any);
         }, 100);
+      } else if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
+        // User just logged in or token refreshed - setup push notifications
+        console.log("User signed in - setting up push notifications");
+        setupPushNotifications().catch((error) => {
+          console.error("Error setting up push notifications after login:", error);
+        });
       }
     });
 
     // Handle deep links when app is already open
     const linkingSubscription = Linking.addEventListener("url", handleDeepLink);
 
-    // Setup push notifications
-    setupPushNotifications();
+    // Setup push notifications (will run even if user not logged in yet)
+    console.log("🚀 Calling setupPushNotifications...");
+    setupPushNotifications()
+      .then(() => {
+        console.log("✅ setupPushNotifications completed");
+      })
+      .catch((error) => {
+        console.error("❌ Error setting up push notifications on mount:", error);
+        console.error("Error details:", JSON.stringify(error, null, 2));
+      });
 
     // Check if app was opened via deep link (non-blocking)
     // Email verification links may contain "code=" or "verify-email"
@@ -217,12 +229,17 @@ export default function RootLayout() {
 
   const setupPushNotifications = async () => {
     try {
+      console.log("🔔 Starting push notification setup...");
+      console.log("📋 Current time:", new Date().toISOString());
+      
       // Request notification permissions
+      console.log("🔐 Requesting notification permissions...");
       const hasPermission = await requestNotificationPermissions();
       if (!hasPermission) {
         console.log("⚠️ Notification permissions not granted");
         return;
       }
+      console.log("✅ Notification permissions granted");
 
       // Get device token
       const token = await getDeviceToken();
@@ -231,18 +248,27 @@ export default function RootLayout() {
         return;
       }
 
-      console.log("📱 Device token obtained:", token);
+      console.log("📱 Device token obtained:", token.substring(0, 50) + "...");
 
-      // Get current user
+      // Get current user (if logged in)
       const {
         data: { user },
+        error: userError,
       } = await supabase.auth.getUser();
 
-      if (user) {
+      // If user is logged in, register token in database
+      if (!userError && user) {
+        console.log("👤 User found:", user.id);
         // Register token in database
-        await registerDeviceToken(user.id, token);
-        console.log("✅ Device token registered");
+        const result = await registerDeviceToken(user.id, token);
+        if (result.success) {
+          console.log("✅ Device token registered successfully");
+        } else {
+          console.error("❌ Failed to register device token:", result.error);
+        }
       } else {
+        // No user logged in yet - this is normal on app startup
+        // Token will be registered when user logs in (handled by SIGNED_IN event)
         console.log("⚠️ No user logged in, token will be registered on login");
       }
 

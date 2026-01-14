@@ -16,17 +16,23 @@ Notifications.setNotificationHandler({
  */
 export async function requestNotificationPermissions(): Promise<boolean> {
   try {
+    console.log("🔐 Checking existing notification permissions...");
     const { status: existingStatus } = await Notifications.getPermissionsAsync();
+    console.log("📊 Existing permission status:", existingStatus);
     let finalStatus = existingStatus;
 
     if (existingStatus !== "granted") {
+      console.log("🔐 Requesting notification permissions...");
       const { status } = await Notifications.requestPermissionsAsync();
+      console.log("📊 New permission status:", status);
       finalStatus = status;
     }
 
-    return finalStatus === "granted";
+    const granted = finalStatus === "granted";
+    console.log("✅ Permission granted:", granted);
+    return granted;
   } catch (error) {
-    console.error("Error requesting notification permissions:", error);
+    console.error("❌ Error requesting notification permissions:", error);
     return false;
   }
 }
@@ -36,12 +42,16 @@ export async function requestNotificationPermissions(): Promise<boolean> {
  */
 export async function getDeviceToken(): Promise<string | null> {
   try {
+    console.log("📱 Getting Expo push token...");
+    console.log("📋 Project ID: 4de293ef-2f4e-4ac6-8b8a-ae84514dc103");
     const tokenData = await Notifications.getExpoPushTokenAsync({
       projectId: "4de293ef-2f4e-4ac6-8b8a-ae84514dc103", // From app.json
     });
+    console.log("✅ Token obtained, length:", tokenData.data?.length || 0);
     return tokenData.data;
   } catch (error) {
-    console.error("Error getting device token:", error);
+    console.error("❌ Error getting device token:", error);
+    console.error("Error details:", JSON.stringify(error, null, 2));
     return null;
   }
 }
@@ -191,4 +201,6 @@ export async function getLastNotificationResponse(): Promise<Notifications.Notif
     return null;
   }
 }
+
+
 

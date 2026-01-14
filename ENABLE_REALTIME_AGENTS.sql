@@ -8,3 +8,6 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.agents;
 -- Optional: If you want to remove it later
 -- ALTER PUBLICATION supabase_realtime DROP TABLE public.agents;
 
+
+
+
