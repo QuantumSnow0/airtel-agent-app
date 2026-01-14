@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "114297831184",
+    "project_id": "airtel-agent-app",
+    "storage_bucket": "airtel-agent-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:114297831184:android:f7ab234886cfde702e2f95",
+        "android_client_info": {
+          "package_name": "com.airtel.agents"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAkYgWVeL1bp27_EBognHJ9HoXn77T_KLY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
