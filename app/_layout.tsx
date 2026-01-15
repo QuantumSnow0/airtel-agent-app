@@ -1,6 +1,6 @@
 import * as Linking from "expo-linking";
-import { Stack, useRouter, useSegments } from "expo-router";
-import { useEffect, useState } from "react";
+import { Stack, useRouter, useSegments, usePathname } from "expo-router";
+import { useEffect, useState, useRef } from "react";
 import { ActivityIndicator, StatusBar, StyleSheet, View } from "react-native";
 import { checkAppVersion } from "../lib/services/appVersionService";
 import {
@@ -12,54 +12,128 @@ import {
 } from "../lib/services/pushNotificationService";
 import { supabase } from "../lib/supabase";
 
+// Move ref outside component to persist across remounts (React Strict Mode)
+const pushNotificationsSetupRef = { current: false };
+const isSettingUpPushNotifications = { current: false };
+const layoutEffectHasRun = { current: false };
+const sessionCheckCompleted = { current: false };
+const initializationCompleted = { current: false };
+
 export default function RootLayout() {
   const [isInitializing, setIsInitializing] = useState(true);
   const [needsUpdate, setNeedsUpdate] = useState(false);
   const [isBlocked, setIsBlocked] = useState(false);
   const router = useRouter();
   const segments = useSegments();
+  const pathname = usePathname();
 
   useEffect(() => {
     let isMounted = true;
     let sessionChecked = false;
+    
+    // Track if this is the first run
+    const isFirstRun = !layoutEffectHasRun.current;
+    if (isFirstRun) {
+      layoutEffectHasRun.current = true;
+      console.log("🚀 Layout effect running (first time)");
+    } else {
+      console.log("⏭️ Layout effect running (remount - React Strict Mode)");
+    }
+
+    // On remounts, just ensure initialization is complete and skip session check
+    if (!isFirstRun) {
+      console.log("⏭️ Remount detected - skipping session check, ensuring initialization complete");
+      if (isMounted && !initializationCompleted.current) {
+        setIsInitializing(false);
+        initializationCompleted.current = true;
+      }
+      return () => {
+        isMounted = false;
+      };
+    }
 
     // Check session immediately (from local storage - very fast)
     // This prevents showing welcome page if user is already signed in
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      sessionChecked = true;
-      if (session?.user && isMounted) {
-        // User is signed in - redirect immediately to dashboard
-        console.log("✅ Session found - redirecting to dashboard");
-        handleAuthChange(session).then(() => {
-          // After navigation, clear loading
+    // Add retry logic for session restoration after force close
+    const checkSessionWithRetry = async (retries = 0): Promise<void> => {
+      // Prevent multiple concurrent session checks
+      if (sessionCheckCompleted.current) {
+        console.log("⏭️ Session check already completed, skipping");
+        if (isMounted && !initializationCompleted.current) {
+          setIsInitializing(false);
+          initializationCompleted.current = true;
+        }
+        return;
+      }
+
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession();
+        sessionChecked = true;
+        sessionCheckCompleted.current = true;
+        
+        if (error) {
+          console.error("Error getting session:", error);
+          // If it's a network error and we have retries left, try again
+          if (retries < 2 && (error.message?.includes("network") || error.message?.includes("timeout"))) {
+            await new Promise(resolve => setTimeout(resolve, 300));
+            sessionCheckCompleted.current = false; // Reset to allow retry
+            return checkSessionWithRetry(retries + 1);
+          }
+          // Other errors or max retries - show welcome page
           if (isMounted) {
             setIsInitializing(false);
+            initializationCompleted.current = true;
           }
-        }).catch((error) => {
-          console.error("Error in handleAuthChange:", error);
+          return;
+        }
+        
+        if (session?.user && isMounted) {
+          // User is signed in - redirect immediately to dashboard
+          console.log("✅ Session found - redirecting to dashboard");
+          handleAuthChange(session).then(() => {
+            // After navigation, clear loading
+            if (isMounted) {
+              setIsInitializing(false);
+              initializationCompleted.current = true;
+            }
+          }).catch((error) => {
+            console.error("Error in handleAuthChange:", error);
+            if (isMounted) {
+              setIsInitializing(false);
+              initializationCompleted.current = true;
+            }
+          });
+        } else if (!session && retries < 2) {
+          // No session but might still be restoring - retry once
+          sessionCheckCompleted.current = false; // Reset to allow retry
+          await new Promise(resolve => setTimeout(resolve, 200));
+          return checkSessionWithRetry(retries + 1);
+        } else {
+          // No session after retries - show welcome page
           if (isMounted) {
             setIsInitializing(false);
+            initializationCompleted.current = true;
           }
-        });
-      } else {
-        // No session - show welcome page
+        }
+      } catch (error) {
+        console.error("Error in checkSessionWithRetry:", error);
+        sessionChecked = true;
+        sessionCheckCompleted.current = true;
         if (isMounted) {
           setIsInitializing(false);
+          initializationCompleted.current = true;
         }
       }
-    }).catch((error) => {
-      console.error("Error getting session:", error);
-      sessionChecked = true;
-      if (isMounted) {
-        setIsInitializing(false);
-      }
-    });
+    };
+    
+    checkSessionWithRetry();
 
     // Fallback timer - if session check takes too long, show app anyway
     const maxLoadTimer = setTimeout(() => {
-      if (isMounted && !sessionChecked) {
+      if (isMounted && !sessionChecked && !initializationCompleted.current) {
         console.log("Max load time reached (500ms) - showing app");
         setIsInitializing(false);
+        initializationCompleted.current = true;
       }
     }, 500); // 500ms fallback - shorter since getSession() is fast
 
@@ -95,16 +169,28 @@ export default function RootLayout() {
     } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === "SIGNED_OUT") {
         console.log("User signed out - redirecting to welcome");
-        // Small delay to ensure router is ready
-        setTimeout(() => {
-          router.replace("/" as any);
-        }, 100);
-      } else if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
-        // User just logged in or token refreshed - setup push notifications
-        console.log("User signed in - setting up push notifications");
-        setupPushNotifications().catch((error) => {
-          console.error("Error setting up push notifications after login:", error);
-        });
+        // Navigate immediately - router.replace will handle duplicate prevention
+        router.replace("/" as any);
+      } else if (event === "SIGNED_IN") {
+        // User just logged in - setup push notifications
+        // Only setup on SIGNED_IN, not on TOKEN_REFRESHED (which fires too frequently)
+        // Only call if not already set up and not currently setting up
+        if (!pushNotificationsSetupRef.current && !isSettingUpPushNotifications.current) {
+          console.log("User signed in - setting up push notifications");
+          pushNotificationsSetupRef.current = true;
+          isSettingUpPushNotifications.current = true;
+          setupPushNotifications()
+            .then(() => {
+              isSettingUpPushNotifications.current = false;
+            })
+            .catch((error) => {
+              console.error("Error setting up push notifications after login:", error);
+              pushNotificationsSetupRef.current = false; // Reset on error so we can retry
+              isSettingUpPushNotifications.current = false;
+            });
+        } else {
+          console.log("⏳ Push notifications already set up or in progress, skipping...");
+        }
       }
     });
 
@@ -112,15 +198,33 @@ export default function RootLayout() {
     const linkingSubscription = Linking.addEventListener("url", handleDeepLink);
 
     // Setup push notifications (will run even if user not logged in yet)
-    console.log("🚀 Calling setupPushNotifications...");
-    setupPushNotifications()
-      .then(() => {
-        console.log("✅ setupPushNotifications completed");
-      })
-      .catch((error) => {
-        console.error("❌ Error setting up push notifications on mount:", error);
-        console.error("Error details:", JSON.stringify(error, null, 2));
-      });
+    // Only setup once to prevent infinite loops - skip on remounts
+    if (isFirstRun) {
+      // Use both ref and flag to prevent concurrent calls
+      if (!pushNotificationsSetupRef.current && !isSettingUpPushNotifications.current) {
+        console.log("🚀 Calling setupPushNotifications...");
+        pushNotificationsSetupRef.current = true;
+        isSettingUpPushNotifications.current = true;
+        setupPushNotifications()
+          .then(() => {
+            console.log("✅ setupPushNotifications completed");
+            isSettingUpPushNotifications.current = false;
+          })
+          .catch((error) => {
+            console.error("❌ Error setting up push notifications on mount:", error);
+            console.error("Error details:", JSON.stringify(error, null, 2));
+            pushNotificationsSetupRef.current = false; // Reset on error so we can retry
+            isSettingUpPushNotifications.current = false;
+          });
+      } else if (isSettingUpPushNotifications.current) {
+        console.log("⏳ setupPushNotifications already in progress, skipping...");
+      } else if (pushNotificationsSetupRef.current) {
+        console.log("✅ setupPushNotifications already completed, skipping...");
+      }
+    } else {
+      // On remount, skip push notifications setup but still allow initialization to complete
+      console.log("⏭️ Skipping push notifications setup on remount");
+    }
 
     // Check if app was opened via deep link (non-blocking)
     // Email verification links may contain "code=" or "verify-email"
@@ -300,20 +404,26 @@ export default function RootLayout() {
       // Check if app was opened from a notification
       // Only handle if app was actually opened from notification (not on every startup)
       // This prevents redirecting to notifications on normal app startup
+      // IMPORTANT: Only check this once on initial mount, not on every app reopen
       const lastResponse = await getLastNotificationResponse();
       if (lastResponse) {
-        // Check if notification was tapped recently (within last 5 seconds)
-        // This ensures we only navigate if user actually tapped a notification
+        // Check if notification was tapped very recently (within last 1 second)
+        // This ensures we only navigate if user actually tapped a notification just now
+        // Stale notifications from previous app sessions will be ignored
         const notificationTime = lastResponse.notification.date || 0;
         const now = Date.now();
         const timeSinceNotification = now - notificationTime;
         
-        // Only navigate if notification was tapped very recently (within 5 seconds)
-        if (timeSinceNotification < 5000) {
-          console.log("📱 App opened from notification tap");
-          handleNotificationTap(lastResponse);
+        // Only navigate if notification was tapped very recently (within 1 second)
+        // This prevents navigating on app reopen from old notifications
+        if (timeSinceNotification < 1000) {
+          console.log("📱 App opened from notification tap (very recent)");
+          // Small delay to ensure router is ready
+          setTimeout(() => {
+            handleNotificationTap(lastResponse);
+          }, 300);
         } else {
-          console.log("📱 Notification response found but too old, ignoring");
+          console.log(`📱 Notification response found but too old (${Math.round(timeSinceNotification / 1000)}s ago), ignoring`);
         }
       }
 
@@ -325,37 +435,68 @@ export default function RootLayout() {
   };
 
   const handleNotificationTap = (response: any) => {
+    if (!response || !response.notification) {
+      console.log("⚠️ Invalid notification response, skipping navigation");
+      return;
+    }
+
     const notification = response.notification;
-    const data = notification.request.content.data;
+    const data = notification.request?.content?.data;
 
     console.log("🔔 Handling notification tap:", data);
+
+    // Check current route to avoid unnecessary navigation
+    const currentRoute = segments[segments.length - 1];
+    
+    // Only navigate if we have valid notification data
+    if (!data) {
+      console.log("⚠️ No notification data, skipping navigation");
+      return;
+    }
 
     // Navigate based on notification type
     if (data?.type) {
       switch (data.type) {
         case "REGISTRATION_STATUS_CHANGE":
-          if (data.relatedId) {
+          if (data.relatedId && currentRoute !== "registrations") {
             router.push("/registrations" as any);
+          } else if (!data.relatedId && currentRoute !== "dashboard") {
+            router.push("/dashboard" as any);
           }
           break;
         case "EARNINGS_UPDATE":
-          router.push("/dashboard" as any);
+          if (currentRoute !== "dashboard") {
+            router.push("/dashboard" as any);
+          }
           break;
         case "ACCOUNT_STATUS_CHANGE":
-          router.push("/dashboard" as any);
+          if (currentRoute !== "dashboard") {
+            router.push("/dashboard" as any);
+          }
           break;
         case "SYNC_FAILURE":
-          router.push("/registrations" as any);
+          if (currentRoute !== "registrations") {
+            router.push("/registrations" as any);
+          }
           break;
         case "SYSTEM_ANNOUNCEMENT":
-          router.push("/notifications" as any);
+          if (currentRoute !== "notifications") {
+            router.push("/notifications" as any);
+          }
           break;
         default:
-          router.push("/notifications" as any);
+          // Unknown type - go to dashboard instead of notifications to avoid confusion
+          console.log("⚠️ Unknown notification type, navigating to dashboard");
+          if (currentRoute !== "dashboard") {
+            router.push("/dashboard" as any);
+          }
       }
     } else {
-      // Default: navigate to notifications
-      router.push("/notifications" as any);
+      // No type specified - go to dashboard instead of notifications
+      console.log("⚠️ No notification type, navigating to dashboard");
+      if (currentRoute !== "dashboard") {
+        router.push("/dashboard" as any);
+      }
     }
   };
 

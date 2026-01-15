@@ -118,6 +118,7 @@ export default function DashboardScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [pendingSyncRegistrations, setPendingSyncRegistrations] = useState<Set<string>>(new Set());
   const spinValue = useRef(new Animated.Value(0)).current;
+  const notificationPulseAnim = useRef(new Animated.Value(1)).current;
   const [toastVisible, setToastVisible] = useState(false);
   const [toastMessage, setToastMessage] = useState("");
   const [toastType, setToastType] = useState<"info" | "success" | "error">("info");
@@ -157,15 +158,16 @@ export default function DashboardScreen() {
     loadInitialNotificationCount();
 
     // Listen for auth state changes (logout, etc.)
+    // Note: Navigation is handled by _layout.tsx to prevent duplicate navigations
     const { data: authListener } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (event === "SIGNED_OUT" || !session) {
           // Clear all caches on logout
+          // Navigation will be handled by _layout.tsx auth listener
           await clearAgentDataCache();
           await clearDashboardDataCache();
           await clearNotificationsCache();
           await clearRegistrationsCache();
-          router.replace("/" as any);
         }
       }
     );
@@ -185,11 +187,25 @@ export default function DashboardScreen() {
       setToastVisible(true);
     };
 
-    const cleanup = setupAutoSync(user.id, (current, total) => {
-      if (total > 0) {
-        showToast(`Syncing offline data... ${current} of ${total}`, "info");
+    const cleanup = setupAutoSync(
+      user.id,
+      (current, total) => {
+        if (total > 0) {
+          showToast(`Syncing offline data... ${current} of ${total}`, "info");
+        }
+      },
+      (result) => {
+        // Refresh data after sync completes if any were synced
+        if (result.synced > 0) {
+          console.log(`🔄 ${result.synced} registrations synced - refreshing dashboard`);
+          showToast(`${result.synced} registration(s) synced successfully!`, "success");
+          // Refresh customer data to show newly synced registrations
+          loadCustomerData(user.id);
+        } else if (result.failed > 0) {
+          showToast(`${result.failed} registration(s) failed to sync`, "error");
+        }
       }
-    });
+    );
 
     return () => {
       cleanup();
@@ -284,36 +300,50 @@ export default function DashboardScreen() {
         },
         async (payload) => {
           console.log("🔔 Notification update received:", payload.eventType, payload);
+          console.log("🔔 Payload new:", payload.new);
+          console.log("🔔 Payload old:", payload.old);
           
-          // Handle different event types
-          if (payload.eventType === "INSERT") {
-            console.log("🆕 New notification inserted:", payload.new);
-            // New notification - reload count
+          // Always reload count for any change (simplified - no need to check event type)
+          try {
+            console.log("🔄 Reloading notification count after change...");
             await loadUnreadNotificationCount(user.id);
-          } else if (payload.eventType === "UPDATE") {
-            console.log("🔄 Notification updated:", payload.new);
-            // Notification marked as read or updated - reload count
-            await loadUnreadNotificationCount(user.id);
-          } else if (payload.eventType === "DELETE") {
-            console.log("🗑️ Notification deleted");
-            // Notification deleted - reload count
-            await loadUnreadNotificationCount(user.id);
+            console.log("✅ Notification count reloaded");
+          } catch (error) {
+            console.error("❌ Error reloading notification count:", error);
           }
         }
       )
       .subscribe((status) => {
         console.log("📡 Notifications subscription status:", status);
         if (status === "SUBSCRIBED") {
-          console.log("✅ Successfully subscribed to notifications");
+          console.log("✅ Successfully subscribed to notifications real-time updates");
+          // Immediately load count when subscribed to ensure we have the latest
+          loadUnreadNotificationCount(user.id).catch((error) => {
+            console.error("Error loading initial notification count:", error);
+          });
         } else if (status === "CHANNEL_ERROR") {
           console.error("❌ Error subscribing to notifications");
+        } else if (status === "TIMED_OUT") {
+          console.error("❌ Notification subscription timed out");
+        } else if (status === "CLOSED") {
+          console.log("⚠️ Notification subscription closed");
         }
       });
 
+    // Also set up a periodic refresh as a fallback (every 30 seconds)
+    // This ensures we get updates even if real-time subscription has issues
+    const refreshInterval = setInterval(() => {
+      console.log("🔄 Periodic notification count refresh (fallback)");
+      loadUnreadNotificationCount(user.id).catch((error) => {
+        console.error("Error in periodic notification count refresh:", error);
+      });
+    }, 30000); // Every 30 seconds
+
     return () => {
-      console.log("🔴 Unsubscribing from registration updates");
+      console.log("🔴 Unsubscribing from registration and notification updates");
       supabase.removeChannel(registrationsChannel);
       supabase.removeChannel(notificationsChannel);
+      clearInterval(refreshInterval);
     };
   }, [user?.id]);
 
@@ -336,6 +366,32 @@ export default function DashboardScreen() {
       spinValue.setValue(0);
     }
   }, [agentData?.status]);
+
+  // Animate notification bell when there are unread notifications
+  useEffect(() => {
+    if (unreadNotifications > 0) {
+      // Start pulsing animation
+      const pulseAnimation = Animated.loop(
+        Animated.sequence([
+          Animated.timing(notificationPulseAnim, {
+            toValue: 1.15,
+            duration: 800,
+            useNativeDriver: true,
+          }),
+          Animated.timing(notificationPulseAnim, {
+            toValue: 1,
+            duration: 800,
+            useNativeDriver: true,
+          }),
+        ])
+      );
+      pulseAnimation.start();
+      return () => pulseAnimation.stop();
+    } else {
+      // Reset animation when no unread notifications
+      notificationPulseAnim.setValue(1);
+    }
+  }, [unreadNotifications]);
 
   // Check network status periodically
   useEffect(() => {
@@ -399,22 +455,89 @@ export default function DashboardScreen() {
       setIsOffline(!online);
 
       // Get current user - use getSession() which works offline
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+      // Add retry logic for session restoration after force close
+      let session = null;
+      let retries = 0;
+      const maxRetries = 3;
       
-      const currentUser = session?.user;
+      while (retries < maxRetries && !session) {
+        const sessionResult = await supabase.auth.getSession();
+        session = sessionResult.data?.session;
+        
+        if (!session && retries < maxRetries - 1) {
+          // Wait a bit before retrying (session might still be restoring)
+          await new Promise(resolve => setTimeout(resolve, 200));
+          retries++;
+        } else {
+          break;
+        }
+      }
+      
+      let currentUser = session?.user;
 
       if (!currentUser) {
-        // No user session - clear cache and redirect to login
-        await clearAgentDataCache();
-        await clearDashboardDataCache();
-        router.replace("/login" as any);
-        return;
+        // No user session after retries - check if we have cached data first
+        const cachedAgentData = await getCachedAgentData();
+        if (cachedAgentData) {
+          // We have cached data but no session - might be a temporary issue
+          // Try to refresh the session one more time
+          try {
+            const { data: refreshSession, error: refreshError } = await supabase.auth.refreshSession();
+            if (refreshSession?.session?.user) {
+              // Session restored - use the refreshed session
+              currentUser = refreshSession.session.user;
+              session = refreshSession.session;
+            } else if (refreshError) {
+              // Refresh failed - check if it's a network error or actual logout
+              console.error("Session refresh failed:", refreshError);
+              // If it's a network error, we can still use cached data
+              // Only logout if it's an auth error (token expired, invalid, etc.)
+              if (refreshError.message?.includes("Invalid") || 
+                  refreshError.message?.includes("expired") ||
+                  refreshError.message?.includes("JWT")) {
+                // Token is invalid - clear cache and redirect to login
+                await clearAgentDataCache();
+                await clearDashboardDataCache();
+                router.replace("/login" as any);
+                return;
+              }
+              // Network error - continue with cached data (offline mode)
+              // We'll use a minimal user object from cache
+              currentUser = { id: cachedAgentData.id, email: cachedAgentData.email } as any;
+            } else {
+              // No session and refresh returned nothing - clear cache and redirect
+              await clearAgentDataCache();
+              await clearDashboardDataCache();
+              router.replace("/login" as any);
+              return;
+            }
+          } catch (refreshError: any) {
+            // Refresh threw an error - if it's a network error, continue with cache
+            console.error("Session refresh error:", refreshError);
+            if (refreshError.message?.includes("network") || 
+                refreshError.message?.includes("timeout") ||
+                refreshError.message?.includes("Failed to fetch")) {
+              // Network error - continue with cached data
+              currentUser = { id: cachedAgentData.id, email: cachedAgentData.email } as any;
+            } else {
+              // Auth error - clear cache and redirect to login
+              await clearAgentDataCache();
+              await clearDashboardDataCache();
+              router.replace("/login" as any);
+              return;
+            }
+          }
+        } else {
+          // No cached data and no session - definitely logged out
+          await clearAgentDataCache();
+          await clearDashboardDataCache();
+          router.replace("/login" as any);
+          return;
+        }
       }
 
-      // Check if email is verified
-      if (!currentUser.email_confirmed_at) {
+      // Check if email is verified (only if we have a real session)
+      if (currentUser && session && !currentUser.email_confirmed_at) {
         await clearAgentDataCache();
         Alert.alert(
           "Email Not Verified",
@@ -706,8 +829,7 @@ export default function DashboardScreen() {
   };
 
   const handleProfilePress = () => {
-    // Profile/settings logic - to be implemented later
-    console.log("Profile button pressed");
+    router.push("/profile" as any);
   };
 
   if (!fontsLoaded) {
@@ -816,7 +938,7 @@ export default function DashboardScreen() {
                 ]}
               >
                 {isApproved ? (
-                  <Text style={styles.statusBadgeIcon}>✓</Text>
+                  <Text style={styles.statusBadgeIconApproved}>✓</Text>
                 ) : (
                   <Animated.Text
                     style={[
@@ -848,7 +970,10 @@ export default function DashboardScreen() {
 
           {/* Right: Notification Icon Button */}
           <TouchableOpacity
-            style={styles.notificationButton}
+            style={[
+              styles.notificationButton,
+              unreadNotifications > 0 && styles.notificationButtonActive,
+            ]}
             onPress={() => {
               // Check if we're already on notifications screen to avoid duplicate stack entries
               const currentRoute = segments[segments.length - 1];
@@ -858,11 +983,29 @@ export default function DashboardScreen() {
               }
               router.push("/notifications" as any);
             }}
-            activeOpacity={0.7}
+            activeOpacity={0.6}
           >
-            <View style={styles.notificationIconContainer}>
-              <Text style={styles.notificationIcon}>🔔</Text>
-              {/* Unread Notification Badge */}
+            <Animated.View
+              style={[
+                styles.notificationIconContainer,
+                unreadNotifications > 0 && {
+                  transform: [{ scale: notificationPulseAnim }],
+                },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.notificationIcon,
+                  unreadNotifications > 0 && styles.notificationIconActive,
+                ]}
+              >
+                🔔
+              </Text>
+              {/* Red dot indicator when there are notifications - always visible */}
+              {unreadNotifications > 0 && (
+                <View style={styles.notificationDot} />
+              )}
+              {/* Unread Notification Badge - always visible when there are notifications */}
               {unreadNotifications > 0 && (
                 <View style={styles.notificationBadge}>
                   <Text style={styles.notificationBadgeText}>
@@ -870,7 +1013,7 @@ export default function DashboardScreen() {
                   </Text>
                 </View>
               )}
-            </View>
+            </Animated.View>
           </TouchableOpacity>
           </View>
         </View>
@@ -1544,37 +1687,82 @@ const createStyles = () => {
     marginRight: 0,
   },
   notificationButton: {
-    padding: 4,
+    padding: 8,
+    borderRadius: 20,
+    backgroundColor: "#F5F7FA",
+    borderWidth: 1,
+    borderColor: "#E0E0E0",
+    shadowColor: "#000000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  notificationButtonActive: {
+    backgroundColor: "#FFF3E0",
+    borderColor: "#FF9800",
+    borderWidth: 2,
+    shadowColor: "#FF9800",
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 6,
   },
   notificationIconContainer: {
     position: "relative",
-    width: 28,
-    height: 28,
+    width: 32,
+    height: 32,
     justifyContent: "center",
     alignItems: "center",
   },
+  notificationDot: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: "#FF3B30",
+    borderWidth: 2.5,
+    borderColor: "#FFFFFF",
+    zIndex: 10,
+    shadowColor: "#FF3B30",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.6,
+    shadowRadius: 2,
+    elevation: 5,
+  },
   notificationIcon: {
-    fontSize: 20,
+    fontSize: 22,
+  },
+  notificationIconActive: {
+    fontSize: 24,
   },
   notificationBadge: {
     position: "absolute",
-    top: -4,
-    right: -4,
-    minWidth: 16,
-    height: 16,
-    borderRadius: 8,
+    top: -8,
+    right: -8,
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
     backgroundColor: "#FF3B30",
     justifyContent: "center",
     alignItems: "center",
-    paddingHorizontal: 3,
-    borderWidth: 2,
-    borderColor: "#F5F7FA",
+    paddingHorizontal: 5,
+    borderWidth: 3,
+    borderColor: "#FFFFFF",
+    shadowColor: "#FF3B30",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.5,
+    shadowRadius: 4,
+    elevation: 6,
+    zIndex: 10,
   },
   notificationBadgeText: {
-    fontSize: 9,
+    fontSize: 11,
     fontFamily: "Inter_600SemiBold",
     color: "#FFFFFF",
     fontWeight: "bold",
+    letterSpacing: 0.2,
   },
   profileIconContainer: {
     width: 40,
@@ -1611,6 +1799,12 @@ const createStyles = () => {
     fontSize: 9,
     color: "#FFA500",
     fontWeight: "bold",
+  },
+  statusBadgeIconApproved: {
+    fontSize: 10,
+    color: "#FFFFFF",
+    fontWeight: "bold",
+    lineHeight: 12,
   },
   body: {
     flex: 1,

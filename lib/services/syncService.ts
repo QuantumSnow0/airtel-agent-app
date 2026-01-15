@@ -167,7 +167,8 @@ async function syncSingleRegistration(
  */
 export async function syncPendingRegistrations(
   agentId?: string,
-  onProgress?: (current: number, total: number) => void
+  onProgress?: (current: number, total: number) => void,
+  onComplete?: (result: SyncResult) => void
 ): Promise<SyncResult> {
   const result: SyncResult = {
     success: true,
@@ -226,11 +227,20 @@ export async function syncPendingRegistrations(
       `✅ Sync complete: ${result.synced} synced, ${result.failed} failed`
     );
 
+    // Call onComplete callback if provided
+    if (onComplete) {
+      onComplete(result);
+    }
+
     return result;
   } catch (error: any) {
     console.error("❌ Error during sync:", error);
     result.success = false;
     result.errors.push(error.message || "Unknown error");
+    // Call onComplete even on error
+    if (onComplete) {
+      onComplete(result);
+    }
     return result;
   }
 }
@@ -442,7 +452,8 @@ export async function syncAllUnsyncedRegistrations(
  */
 export function setupAutoSync(
   agentId?: string,
-  onProgress?: (current: number, total: number) => void
+  onProgress?: (current: number, total: number) => void,
+  onComplete?: (result: SyncResult) => void
 ): () => void {
   let syncInterval: NodeJS.Timeout | null = null;
   let isSyncing = false;
@@ -455,7 +466,7 @@ export function setupAutoSync(
 
     isSyncing = true;
     try {
-      await syncPendingRegistrations(agentId, onProgress);
+      await syncPendingRegistrations(agentId, onProgress, onComplete);
     } catch (error) {
       console.error("Error in auto-sync:", error);
     } finally {

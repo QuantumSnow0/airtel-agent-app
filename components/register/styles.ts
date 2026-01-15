@@ -13,7 +13,7 @@ export const registerStyles = StyleSheet.create({
     flexGrow: 1,
     paddingHorizontal: 24,
     paddingTop: 20,
-    paddingBottom: 300, // Increased padding to ensure all fields are accessible even without keyboard
+    paddingBottom: 400, // Increased padding to ensure all fields are accessible when keyboard is open
   },
   
   // Header styles

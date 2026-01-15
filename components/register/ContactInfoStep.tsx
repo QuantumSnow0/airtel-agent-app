@@ -33,15 +33,8 @@ export default function ContactInfoStep({
                 onChangeText={onChange}
                 onBlur={onBlur}
                 onFocus={() => {
-                  // Scroll to show this field when focused
-                  setTimeout(
-                    () => {
-                      scrollViewRef.current?.scrollToEnd({
-                        animated: true,
-                      });
-                    },
-                    Platform.OS === "ios" ? 300 : 200
-                  );
+                  // KeyboardAvoidingView will handle the layout adjustment
+                  // No need to manually scroll
                 }}
                 keyboardType="phone-pad"
                 maxLength={16}
@@ -68,15 +61,8 @@ export default function ContactInfoStep({
                 onChangeText={onChange}
                 onBlur={onBlur}
                 onFocus={() => {
-                  // Scroll to show this field when focused
-                  setTimeout(
-                    () => {
-                      scrollViewRef.current?.scrollToEnd({
-                        animated: true,
-                      });
-                    },
-                    Platform.OS === "ios" ? 300 : 200
-                  );
+                  // KeyboardAvoidingView will handle the layout adjustment
+                  // No need to manually scroll
                 }}
                 keyboardType="phone-pad"
                 maxLength={16}
@@ -135,6 +121,9 @@ export default function ContactInfoStep({
                 value={value}
                 onChangeText={onChange}
                 onBlur={onBlur}
+                onFocus={() => {
+                  // KeyboardAvoidingView will handle the layout adjustment
+                }}
                 autoCapitalize="words"
               />
               {error && <Text style={registerStyles.errorText}>{error.message}</Text>}

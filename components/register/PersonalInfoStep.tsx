@@ -1,4 +1,5 @@
-import { View, Text, TextInput, TouchableOpacity } from "react-native";
+import { View, Text, TextInput, TouchableOpacity, ScrollView } from "react-native";
+import { useRef } from "react";
 import { Controller, Control } from "react-hook-form";
 import { PersonalInfoFormData } from "@/lib/validation/registerSchemas";
 import { registerStyles } from "./styles";
@@ -9,6 +10,7 @@ interface PersonalInfoStepProps {
   showConfirmPassword: boolean;
   onTogglePassword: () => void;
   onToggleConfirmPassword: () => void;
+  scrollViewRef?: React.RefObject<ScrollView | null>;
 }
 
 export default function PersonalInfoStep({
@@ -17,7 +19,20 @@ export default function PersonalInfoStep({
   showConfirmPassword,
   onTogglePassword,
   onToggleConfirmPassword,
+  scrollViewRef,
 }: PersonalInfoStepProps) {
+  // Helper function to scroll input into view
+  // KeyboardAvoidingView handles most of the work, this is just a gentle nudge if needed
+  const scrollToInput = () => {
+    // Let KeyboardAvoidingView handle the main adjustment
+    // Just ensure we have enough space by scrolling slightly if needed
+    if (scrollViewRef?.current) {
+      setTimeout(() => {
+        // Small incremental scroll to help with visibility
+        scrollViewRef.current?.scrollTo({ y: 0, animated: false });
+      }, 100);
+    }
+  };
   return (
     <View style={registerStyles.form}>
       {/* Name Field */}
@@ -26,20 +41,25 @@ export default function PersonalInfoStep({
         <Controller
           control={control}
           name="name"
-          render={({ field: { onChange, onBlur, value }, fieldState: { error } }) => (
-            <>
-              <TextInput
-                style={[registerStyles.input, error && registerStyles.inputError]}
-                placeholder="Enter your full name"
-                placeholderTextColor="#999999"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                autoCapitalize="words"
-              />
-              {error && <Text style={registerStyles.errorText}>{error.message}</Text>}
-            </>
-          )}
+          render={({ field: { onChange, onBlur, value }, fieldState: { error } }) => {
+            const inputRef = useRef<TextInput>(null);
+            return (
+              <>
+                <TextInput
+                  ref={inputRef}
+                  style={[registerStyles.input, error && registerStyles.inputError]}
+                  placeholder="Enter your full name"
+                  placeholderTextColor="#999999"
+                  value={value}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  onFocus={scrollToInput}
+                  autoCapitalize="words"
+                />
+                {error && <Text style={registerStyles.errorText}>{error.message}</Text>}
+              </>
+            );
+          }}
         />
       </View>
 
@@ -49,22 +69,27 @@ export default function PersonalInfoStep({
         <Controller
           control={control}
           name="email"
-          render={({ field: { onChange, onBlur, value }, fieldState: { error } }) => (
-            <>
-              <TextInput
-                style={[registerStyles.input, error && registerStyles.inputError]}
-                placeholder="Enter your email address"
-                placeholderTextColor="#999999"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                keyboardType="email-address"
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-              {error && <Text style={registerStyles.errorText}>{error.message}</Text>}
-            </>
-          )}
+          render={({ field: { onChange, onBlur, value }, fieldState: { error } }) => {
+            const inputRef = useRef<TextInput>(null);
+            return (
+              <>
+                <TextInput
+                  ref={inputRef}
+                  style={[registerStyles.input, error && registerStyles.inputError]}
+                  placeholder="Enter your email address"
+                  placeholderTextColor="#999999"
+                  value={value}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  onFocus={scrollToInput}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                {error && <Text style={registerStyles.errorText}>{error.message}</Text>}
+              </>
+            );
+          }}
         />
       </View>
 
@@ -75,26 +100,31 @@ export default function PersonalInfoStep({
           <Controller
             control={control}
             name="password"
-            render={({ field: { onChange, onBlur, value }, fieldState: { error } }) => (
-              <>
-                <TextInput
-                  style={[
-                    registerStyles.input,
-                    registerStyles.passwordInput,
-                    error && registerStyles.inputError,
-                  ]}
-                  placeholder="Create a password"
-                  placeholderTextColor="#999999"
-                  value={value}
-                  onChangeText={onChange}
-                  onBlur={onBlur}
-                  secureTextEntry={!showPassword}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-                {error && <Text style={registerStyles.errorText}>{error.message}</Text>}
-              </>
-            )}
+            render={({ field: { onChange, onBlur, value }, fieldState: { error } }) => {
+              const inputRef = useRef<TextInput>(null);
+              return (
+                <>
+                  <TextInput
+                    ref={inputRef}
+                    style={[
+                      registerStyles.input,
+                      registerStyles.passwordInput,
+                      error && registerStyles.inputError,
+                    ]}
+                    placeholder="Create a password"
+                    placeholderTextColor="#999999"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    onFocus={scrollToInput}
+                    secureTextEntry={!showPassword}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                  {error && <Text style={registerStyles.errorText}>{error.message}</Text>}
+                </>
+              );
+            }}
           />
           <TouchableOpacity style={registerStyles.eyeButton} onPress={onTogglePassword}>
             <Text style={registerStyles.eyeButtonText}>
@@ -111,26 +141,31 @@ export default function PersonalInfoStep({
           <Controller
             control={control}
             name="confirmPassword"
-            render={({ field: { onChange, onBlur, value }, fieldState: { error } }) => (
-              <>
-                <TextInput
-                  style={[
-                    registerStyles.input,
-                    registerStyles.passwordInput,
-                    error && registerStyles.inputError,
-                  ]}
-                  placeholder="Confirm your password"
-                  placeholderTextColor="#999999"
-                  value={value}
-                  onChangeText={onChange}
-                  onBlur={onBlur}
-                  secureTextEntry={!showConfirmPassword}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-                {error && <Text style={registerStyles.errorText}>{error.message}</Text>}
-              </>
-            )}
+            render={({ field: { onChange, onBlur, value }, fieldState: { error } }) => {
+              const inputRef = useRef<TextInput>(null);
+              return (
+                <>
+                  <TextInput
+                    ref={inputRef}
+                    style={[
+                      registerStyles.input,
+                      registerStyles.passwordInput,
+                      error && registerStyles.inputError,
+                    ]}
+                    placeholder="Confirm your password"
+                    placeholderTextColor="#999999"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    onFocus={scrollToInput}
+                    secureTextEntry={!showConfirmPassword}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                  {error && <Text style={registerStyles.errorText}>{error.message}</Text>}
+                </>
+              );
+            }}
           />
           <TouchableOpacity
             style={registerStyles.eyeButton}

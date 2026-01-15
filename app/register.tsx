@@ -94,34 +94,20 @@ export default function RegisterScreen() {
     }
   }, [currentStep, fontsLoaded]);
 
-  // Handle keyboard show/hide to adjust scroll position - MUST be before early return
+  // Handle keyboard show/hide - removed auto-scroll to prevent content going out of view
+  // Individual inputs will handle their own scrolling via onFocus
   useEffect(() => {
-    if (!fontsLoaded) return; // Early exit if fonts not loaded, but hook is still called
+    if (!fontsLoaded) return;
 
-    const keyboardDidShowListener = Keyboard.addListener(
-      Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow",
-      (event) => {
-        setTimeout(
-          () => {
-            // Scroll to end to show buttons when keyboard opens
-            scrollViewRef.current?.scrollToEnd({ animated: true });
-          },
-          Platform.OS === "ios" ? 250 : 100
-        );
-      }
-    );
-
+    // Just listen for keyboard hide to ensure proper cleanup
     const keyboardDidHideListener = Keyboard.addListener(
       Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide",
       () => {
-        // Don't reset scroll position when keyboard closes
-        // This allows users to scroll and access all fields even when keyboard is dismissed
-        // The scroll position should remain where the user left it
+        // Keyboard closed - no action needed
       }
     );
 
     return () => {
-      keyboardDidShowListener.remove();
       keyboardDidHideListener.remove();
     };
   }, [fontsLoaded]);
@@ -392,8 +378,9 @@ export default function RegisterScreen() {
     <View style={registerStyles.container}>
       <KeyboardAvoidingView
         style={[registerStyles.keyboardView, { paddingTop: insets.top }]}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-        keyboardVerticalOffset={0}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
+        enabled={true}
       >
         <ScrollView
           ref={scrollViewRef}
@@ -428,6 +415,7 @@ export default function RegisterScreen() {
               onToggleConfirmPassword={() =>
                 setShowConfirmPassword(!showConfirmPassword)
               }
+              scrollViewRef={scrollViewRef}
             />
           )}
 

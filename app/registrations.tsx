@@ -44,6 +44,7 @@ import {
   syncAllUnsyncedRegistrations,
   syncPendingRegistrations,
   isOnline,
+  setupAutoSync,
 } from "../lib/services/syncService";
 import { Toast } from "../components/Toast";
 
@@ -107,6 +108,75 @@ export default function RegistrationsScreen() {
     setRegistrations(filtered);
   }, [searchQuery, allRegistrations]);
 
+  // Set up auto-sync with callback to refresh data after sync
+  useEffect(() => {
+    const loadUserAndSetupSync = async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const user = session?.user;
+
+      if (!user) return;
+
+      // Setup auto-sync with callback to refresh registrations after sync completes
+      const cleanup = setupAutoSync(
+        user.id,
+        undefined, // No progress callback needed
+        (result) => {
+          // Refresh registrations after sync completes if any were synced
+          if (result.synced > 0) {
+            console.log(`🔄 ${result.synced} registrations synced - refreshing data`);
+            loadRegistrations();
+          }
+        }
+      );
+
+      return cleanup;
+    };
+
+    const cleanupPromise = loadUserAndSetupSync();
+    
+    return () => {
+      cleanupPromise.then((cleanup) => {
+        if (cleanup) cleanup();
+      });
+    };
+  }, []);
+
+  // Monitor network status and refresh when coming back online
+  useEffect(() => {
+    let wasOffline = false;
+    let checkInterval: NodeJS.Timeout;
+
+    const checkNetworkStatus = async () => {
+      try {
+        const online = await isOnline();
+        if (!online && !wasOffline) {
+          wasOffline = true;
+        } else if (online && wasOffline) {
+          // Just came back online - refresh data
+          console.log("🌐 Back online - refreshing registrations");
+          wasOffline = false;
+          loadRegistrations();
+        }
+      } catch (error) {
+        console.error("Error checking network status:", error);
+      }
+    };
+
+    // Check immediately
+    checkNetworkStatus();
+
+    // Then check every 10 seconds
+    checkInterval = setInterval(checkNetworkStatus, 10000);
+
+    return () => {
+      if (checkInterval) {
+        clearInterval(checkInterval);
+      }
+    };
+  }, []);
+
   const loadRegistrations = async () => {
     try {
       setIsLoading(true);
@@ -126,23 +196,43 @@ export default function RegistrationsScreen() {
       // Check if online
       const online = await isOnline();
 
-      // If offline, load from cache
+      // If offline, load from cache and pending registrations
       if (!online) {
-        console.log("📴 Offline - loading registrations from cache");
+        console.log("📴 Offline - loading registrations from cache and pending");
         const cachedRegistrations = await getCachedRegistrations();
-        if (cachedRegistrations) {
-          // Apply filter to cached data
-          let filtered = cachedRegistrations;
-          if (filter !== "all") {
-            filtered = cachedRegistrations.filter((reg) => reg.status === filter);
-          }
-          setAllRegistrations(filtered as Registration[]);
-          setTotalCount(filtered.length);
-        } else {
-          // No cache available
-          setAllRegistrations([]);
-          setTotalCount(0);
+        const pending = await getPendingRegistrations(user.id);
+        
+        // Convert pending registrations to Registration format
+        const pendingRegistrations: Registration[] = pending.map((p: any) => ({
+          id: p.id,
+          customer_name: p.customerData.customerName,
+          preferred_package: p.customerData.preferredPackage,
+          installation_town: p.customerData.installationTown,
+          status: "pending" as const,
+          created_at: p.created_at,
+          ms_forms_response_id: undefined,
+          ms_forms_submitted_at: undefined,
+          syncStatus: "pending" as const,
+        }));
+
+        // Merge cached and pending registrations
+        const pendingIds = new Set(pending.map((p: any) => p.id));
+        const combined = [
+          ...pendingRegistrations,
+          ...(cachedRegistrations || []).filter((reg) => !pendingIds.has(reg.id)),
+        ].sort((a, b) => {
+          const dateA = new Date(a.created_at).getTime();
+          const dateB = new Date(b.created_at).getTime();
+          return dateB - dateA;
+        });
+
+        // Apply filter to combined data
+        let filtered = combined;
+        if (filter !== "all") {
+          filtered = combined.filter((reg) => reg.status === filter);
         }
+        setAllRegistrations(filtered as Registration[]);
+        setTotalCount(filtered.length);
         setIsLoading(false);
         return;
       }
@@ -178,9 +268,22 @@ export default function RegistrationsScreen() {
         throw error;
       }
 
-      // Check for pending offline registrations
+      // Check for pending offline registrations and merge them
       const pending = await getPendingRegistrations(user.id);
       const pendingIds = new Set(pending.map((p: any) => p.id));
+
+      // Convert pending registrations to Registration format for display
+      const pendingRegistrations: Registration[] = pending.map((p: any) => ({
+        id: p.id,
+        customer_name: p.customerData.customerName,
+        preferred_package: p.customerData.preferredPackage,
+        installation_town: p.customerData.installationTown,
+        status: "pending" as const,
+        created_at: p.created_at,
+        ms_forms_response_id: undefined,
+        ms_forms_submitted_at: undefined,
+        syncStatus: "pending" as const,
+      }));
 
       // Enhance registrations with sync status
       const enhancedRegistrations = (data || []).map((reg: any) => {
@@ -207,6 +310,18 @@ export default function RegistrationsScreen() {
           ...reg,
           syncStatus,
         };
+      });
+
+      // Merge pending offline registrations with Supabase registrations
+      // Combine both arrays, ensuring pending ones are at the top (most recent)
+      const allRegistrationsCombined = [
+        ...pendingRegistrations,
+        ...enhancedRegistrations.filter((reg) => !pendingIds.has(reg.id)), // Exclude any that are already in pending
+      ].sort((a, b) => {
+        // Sort by created_at descending (most recent first)
+        const dateA = new Date(a.created_at).getTime();
+        const dateB = new Date(b.created_at).getTime();
+        return dateB - dateA;
       });
 
       // Save to cache (save all registrations, not filtered)
@@ -237,13 +352,22 @@ export default function RegistrationsScreen() {
           }
           return { ...reg, syncStatus };
         });
-        await saveRegistrationsToCache(allEnhanced);
+        // Merge pending registrations for cache too
+        const allDataWithPending = [
+          ...pendingRegistrations,
+          ...allEnhanced.filter((reg) => !pendingIds.has(reg.id)),
+        ].sort((a, b) => {
+          const dateA = new Date(a.created_at).getTime();
+          const dateB = new Date(b.created_at).getTime();
+          return dateB - dateA;
+        });
+        await saveRegistrationsToCache(allDataWithPending);
       }
 
-      setAllRegistrations(enhancedRegistrations);
+      setAllRegistrations(allRegistrationsCombined);
       
       // Set total count (for the current filter, not search)
-      setTotalCount(enhancedRegistrations.length);
+      setTotalCount(allRegistrationsCombined.length);
       
       // Note: Search filtering is handled by the useEffect hook above
     } catch (error: any) {

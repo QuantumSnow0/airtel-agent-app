@@ -571,7 +571,8 @@ export default function RegisterCustomerScreen() {
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
-        keyboardVerticalOffset={0}
+        keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
+        enabled={true}
       >
         {/* Header with Back Button */}
         <View
@@ -670,7 +671,7 @@ export default function RegisterCustomerScreen() {
 
         <ScrollView
           style={{ flex: 1 }}
-          contentContainerStyle={{ paddingBottom: 100 }}
+          contentContainerStyle={{ paddingBottom: 200 }}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >

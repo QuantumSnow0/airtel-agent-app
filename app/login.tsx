@@ -85,36 +85,7 @@ export default function LoginScreen() {
     return null;
   }
 
-  // Handle keyboard show/hide to ensure Sign In button is visible
-  useEffect(() => {
-    const keyboardDidShowListener = Keyboard.addListener(
-      Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow",
-      (event) => {
-        // Scroll to end to show buttons when keyboard opens
-        setTimeout(
-          () => {
-            scrollViewRef.current?.scrollToEnd({ animated: true });
-          },
-          Platform.OS === "ios" ? 250 : 100
-        );
-      }
-    );
-
-    const keyboardDidHideListener = Keyboard.addListener(
-      Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide",
-      () => {
-        // Reset scroll to top when keyboard closes
-        setTimeout(() => {
-          scrollViewRef.current?.scrollTo({ y: 0, animated: true });
-        }, 100);
-      }
-    );
-
-    return () => {
-      keyboardDidShowListener.remove();
-      keyboardDidHideListener.remove();
-    };
-  }, []);
+  // Removed auto-scroll handlers - KeyboardAvoidingView will handle layout adjustments
 
   const onSubmit = async (data: LoginFormData) => {
     setIsLoading(true);
@@ -273,8 +244,9 @@ export default function LoginScreen() {
     <View style={styles.container}>
       <KeyboardAvoidingView
         style={[styles.keyboardView, { paddingTop: insets.top }]}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-        keyboardVerticalOffset={0}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
+        enabled={true}
       >
         <ScrollView
           ref={scrollViewRef}
@@ -355,16 +327,7 @@ export default function LoginScreen() {
                           setError(null);
                         }}
                         onFocus={() => {
-                          // When password field is focused, scroll to show Sign In button
-                          // Delay to allow keyboard animation to complete
-                          setTimeout(
-                            () => {
-                              scrollViewRef.current?.scrollToEnd({
-                                animated: true,
-                              });
-                            },
-                            Platform.OS === "ios" ? 300 : 200
-                          );
+                          // KeyboardAvoidingView will handle the layout adjustment
                         }}
                         onBlur={onBlur}
                         secureTextEntry={!showPassword}
@@ -476,7 +439,7 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     paddingHorizontal: 24,
     paddingTop: 40,
-    paddingBottom: 350, // Extra padding to ensure Sign In button is above keyboard (same as registration)
+    paddingBottom: 400, // Extra padding to ensure Sign In button is above keyboard
   },
   header: {
     marginBottom: 40,

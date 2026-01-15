@@ -1,4 +1,5 @@
-import { Text, View, StyleSheet, TouchableOpacity, Image, ActivityIndicator } from "react-native";
+import { Text, View, StyleSheet, TouchableOpacity, ActivityIndicator, ScrollView } from "react-native";
+import { Image } from "expo-image";
 import { useRouter } from "expo-router";
 import { useFonts } from "expo-font";
 import {
@@ -47,13 +48,17 @@ export default function WelcomeScreen() {
 
   return (
     <View style={styles.container}>
-      <View style={styles.contentWrapper}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
         {/* Welcome Image Section */}
         <View style={styles.logoContainer}>
           <Image
             source={require("../assets/images/welcome-image.jpg")}
             style={styles.welcomeImage}
-            resizeMode="contain"
+            contentFit="contain"
+            transition={200}
           />
         </View>
 
@@ -69,7 +74,7 @@ export default function WelcomeScreen() {
             installations.
           </Text>
         </View>
-      </View>
+      </ScrollView>
 
       {/* Button Section - Fixed at bottom */}
       <View style={styles.buttonContainer}>
@@ -97,20 +102,21 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#FFFFFF",
+  },
+  scrollContent: {
+    flexGrow: 1,
     paddingHorizontal: 24,
     paddingTop: 60,
-    paddingBottom: 40,
-    justifyContent: "center",
+    paddingBottom: 20,
     alignItems: "center",
-  },
-  contentWrapper: {
-    flex: 1,
   },
   logoContainer: {
     justifyContent: "center",
     alignItems: "center",
-    paddingTop: 40,
-    paddingBottom: 20,
+    paddingTop: 20,
+    paddingBottom: 30,
+    width: "100%",
+    minHeight: 250,
   },
   logo: {
     width: 120,
@@ -118,12 +124,14 @@ const styles = StyleSheet.create({
   },
   welcomeImage: {
     width: "100%",
-    height: 300,
+    height: 250,
     maxWidth: 400,
+    minHeight: 200,
   },
   contentContainer: {
     paddingTop: 0,
-    paddingBottom: 20,
+    paddingBottom: 40,
+    width: "100%",
   },
   title: {
     fontSize: 32,
@@ -150,9 +158,12 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
   },
   buttonContainer: {
+    paddingHorizontal: 24,
     paddingTop: 20,
-    paddingBottom: 20,
-    marginBottom: scaleHeight(80), // Add bottom margin to prevent navbar overlap
+    paddingBottom: 40,
+    backgroundColor: "#FFFFFF",
+    borderTopWidth: 1,
+    borderTopColor: "#F0F0F0",
   },
   button: {
     backgroundColor: "#0066CC",
