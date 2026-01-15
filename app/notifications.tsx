@@ -8,7 +8,7 @@ import {
     Poppins_700Bold,
 } from "@expo-google-fonts/poppins";
 import { useFonts } from "expo-font";
-import { useRouter } from "expo-router";
+import { useRouter, useSegments } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
     ActivityIndicator,
@@ -21,6 +21,12 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../lib/supabase";
+import {
+  getCachedNotifications,
+  saveNotificationsToCache,
+  clearNotificationsCache,
+  CachedNotification,
+} from "../lib/cache/notificationsCache";
 import {
     getResponsivePadding,
     scaleFont,
@@ -89,6 +95,7 @@ interface Notification {
 
 export default function NotificationsScreen() {
   const router = useRouter();
+  const segments = useSegments();
   const insets = useSafeAreaInsets();
   const [refreshing, setRefreshing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -114,7 +121,11 @@ export default function NotificationsScreen() {
     
     // Set up real-time subscription for notifications
     const setupRealtimeSubscription = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
+      // Use getSession() which works offline
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const user = session?.user;
       if (!user) return;
 
       const channel = supabase
@@ -159,10 +170,12 @@ export default function NotificationsScreen() {
       setIsLoading(true);
     }
     try {
-      // Get current user
+      // Get current user - use getSession() which works offline
       const {
-        data: { user },
-      } = await supabase.auth.getUser();
+        data: { session },
+      } = await supabase.auth.getSession();
+      
+      const user = session?.user;
 
       if (!user) {
         console.error("No user found");
@@ -170,7 +183,34 @@ export default function NotificationsScreen() {
         return;
       }
 
-      // Fetch notifications from database
+      // Check if online
+      const { isOnline } = await import("../lib/services/syncService");
+      const online = await isOnline();
+
+      // If offline, load from cache
+      if (!online) {
+        console.log("📴 Offline - loading notifications from cache");
+        const cachedNotifications = await getCachedNotifications();
+        if (cachedNotifications) {
+          setNotifications(cachedNotifications as Notification[]);
+          setIsLoading(false);
+          return;
+        } else {
+          // No cache available
+          setNotifications([]);
+          setIsLoading(false);
+          return;
+        }
+      }
+
+      // Online - Try to load cached data first (for fast initial display)
+      const cachedNotifications = await getCachedNotifications();
+      if (cachedNotifications && !skipLoadingState) {
+        setNotifications(cachedNotifications as Notification[]);
+        setIsLoading(false); // Show cached data immediately
+      }
+
+      // Fetch fresh notifications from database (background fetch)
       const { data, error } = await supabase
         .from("notifications")
         .select("*")
@@ -180,9 +220,11 @@ export default function NotificationsScreen() {
 
       if (error) {
         console.error("Error loading notifications:", error);
-        setIsLoading(false);
-        // Fallback to fake data for now
-        loadFakeNotifications();
+        // If we have cached data, keep using it
+        if (!cachedNotifications) {
+          setIsLoading(false);
+          loadFakeNotifications();
+        }
         return;
       }
 
@@ -198,6 +240,8 @@ export default function NotificationsScreen() {
         metadata: record.metadata || {},
       }));
 
+      // Save to cache
+      await saveNotificationsToCache(notifications);
       setNotifications(notifications);
 
       // Automatically mark all unread notifications as read after a short delay
@@ -205,8 +249,13 @@ export default function NotificationsScreen() {
       markNotificationsAsRead(notifications);
     } catch (error) {
       console.error("Error loading notifications:", error);
-      // Fallback to fake data
-      loadFakeNotifications();
+      // Try to load from cache on error
+      const cachedNotifications = await getCachedNotifications();
+      if (cachedNotifications) {
+        setNotifications(cachedNotifications as Notification[]);
+      } else {
+        loadFakeNotifications();
+      }
     } finally {
       setIsLoading(false);
     }
@@ -307,7 +356,11 @@ export default function NotificationsScreen() {
     setRefreshing(true);
     // Don't set isLoading during refresh - RefreshControl already shows spinner
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      // Use getSession() which works offline
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const user = session?.user;
       if (!user) {
         setRefreshing(false);
         return;
@@ -675,7 +728,18 @@ export default function NotificationsScreen() {
           <View style={styles.headerLeft}>
             <TouchableOpacity
               style={styles.backButton}
-              onPress={() => router.back()}
+              onPress={() => {
+                // Check if we can go back (if there's a previous screen in stack)
+                // If we're at the root (accessed via tab), navigate to dashboard instead
+                const currentRoute = segments[segments.length - 1];
+                if (segments.length <= 1 || currentRoute === "notifications") {
+                  // We're at root or already on notifications, go to dashboard
+                  router.replace("/dashboard" as any);
+                } else {
+                  // There's a previous screen, go back normally
+                  router.back();
+                }
+              }}
               activeOpacity={0.7}
             >
               <Text style={styles.backButtonText}>←</Text>

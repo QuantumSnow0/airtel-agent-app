@@ -17,12 +17,25 @@ export interface SyncResult {
 
 /**
  * Check if device is online
+ * Uses timeout to prevent hanging when offline
  */
 export async function isOnline(): Promise<boolean> {
   try {
+    // Create a timeout promise (2 seconds max)
+    const timeoutPromise = new Promise<boolean>((resolve) => {
+      setTimeout(() => resolve(false), 2000);
+    });
+
     // Try a simple query to Supabase to check connectivity
-    const { error } = await supabase.from("agents").select("id").limit(1);
-    return !error;
+    const queryPromise = supabase
+      .from("agents")
+      .select("id")
+      .limit(1)
+      .then(({ error }) => !error)
+      .catch(() => false);
+
+    // Race between query and timeout
+    return await Promise.race([queryPromise, timeoutPromise]);
   } catch (error) {
     return false;
   }

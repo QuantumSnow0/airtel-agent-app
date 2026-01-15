@@ -54,6 +54,7 @@ import {
   getPendingCount,
 } from "../lib/services/offlineStorage";
 import { isOnline, syncPendingRegistrations } from "../lib/services/syncService";
+import { getCachedAgentData } from "../lib/cache/agentCache";
 
 const STEPS = [
   { id: 1, title: "Customer Information" },
@@ -139,14 +140,60 @@ export default function RegisterCustomerScreen() {
 
   const loadAgentData = async () => {
     try {
+      // Use getSession() which works offline
       const {
-        data: { user },
-      } = await supabase.auth.getUser();
+        data: { session },
+      } = await supabase.auth.getSession();
+      const user = session?.user;
       if (!user) {
         router.replace("/login" as any);
         return;
       }
 
+      // Check if online
+      const online = await isOnline();
+
+      // If offline, try to load from cache first
+      if (!online) {
+        console.log("📴 Offline - loading agent data from cache");
+        const cachedAgentData = await getCachedAgentData();
+        if (cachedAgentData) {
+          if (cachedAgentData.status !== "approved") {
+            setAgentData(cachedAgentData); // Store agent data to show status in modal
+            setShowApprovalModal(true);
+            return;
+          }
+          setAgentData(cachedAgentData);
+          return;
+        } else {
+          // No cache available - allow form to work with minimal agent data
+          console.log("⚠️ No cached agent data available, but allowing offline registration");
+          // Set minimal agent data to allow form submission
+          // The form will work, and agent info will be minimal but sufficient for offline storage
+          setAgentData({
+            id: user.id,
+            name: "Agent",
+            status: "approved", // Allow registration in offline mode
+            airtel_phone: "",
+            safaricom_phone: "",
+          });
+          // Don't show alert - just allow the form to work silently
+          return;
+        }
+      }
+
+      // Online - Try to load from cache first (for fast display)
+      const cachedAgentData = await getCachedAgentData();
+      if (cachedAgentData) {
+        if (cachedAgentData.status !== "approved") {
+          setAgentData(cachedAgentData);
+          setShowApprovalModal(true);
+          return;
+        }
+        setAgentData(cachedAgentData);
+      }
+
+      // Fetch fresh agent data from database
       const { data: agent, error } = await supabase
         .from("agents")
         .select("*")
@@ -154,10 +201,19 @@ export default function RegisterCustomerScreen() {
         .single();
 
       if (error || !agent) {
+        // If we have cached data, use it
+        if (cachedAgentData) {
+          console.warn("⚠️ Failed to fetch fresh agent data, using cache");
+          return;
+        }
         Alert.alert("Error", "Agent profile not found");
         router.back();
         return;
       }
+
+      // Save to cache
+      const { saveAgentDataToCache } = await import("../lib/cache/agentCache");
+      await saveAgentDataToCache(agent);
 
       if (agent.status !== "approved") {
         setAgentData(agent); // Store agent data to show status in modal
@@ -168,8 +224,20 @@ export default function RegisterCustomerScreen() {
       setAgentData(agent);
     } catch (error: any) {
       console.error("Error loading agent data:", error);
-      Alert.alert("Error", "Failed to load agent data");
-      router.back();
+      // Try to load from cache on error
+      const cachedAgentData = await getCachedAgentData();
+      if (cachedAgentData) {
+        console.log("✅ Using cached agent data after error");
+        if (cachedAgentData.status !== "approved") {
+          setAgentData(cachedAgentData);
+          setShowApprovalModal(true);
+          return;
+        }
+        setAgentData(cachedAgentData);
+      } else {
+        Alert.alert("Error", "Failed to load agent data. Please check your connection.");
+        router.back();
+      }
     }
   };
 
@@ -228,9 +296,9 @@ export default function RegisterCustomerScreen() {
         visitTime: data.visitTime,
       };
 
-      // Prepare agent data
+      // Prepare agent data (with fallback for offline mode)
       const agentInfo = {
-        name: agentData.name,
+        name: agentData.name || "Agent",
         mobile: agentData.airtel_phone || agentData.safaricom_phone || "",
       };
 

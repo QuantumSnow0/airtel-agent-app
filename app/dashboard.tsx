@@ -8,7 +8,7 @@ import {
     Poppins_700Bold,
 } from "@expo-google-fonts/poppins";
 import { useFonts } from "expo-font";
-import { useRouter } from "expo-router";
+import { useRouter, useSegments } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
     ActivityIndicator,
@@ -34,6 +34,8 @@ import {
     getCachedDashboardData,
     saveDashboardDataToCache,
 } from "../lib/cache/dashboardCache";
+import { clearNotificationsCache } from "../lib/cache/notificationsCache";
+import { clearRegistrationsCache } from "../lib/cache/registrationsCache";
 import { getPendingRegistrations, initOfflineStorage } from "../lib/services/offlineStorage";
 import { isOnline, setupAutoSync } from "../lib/services/syncService";
 import { supabase } from "../lib/supabase";
@@ -70,6 +72,7 @@ const getInitial = (name?: string, email?: string): string => {
 
 export default function DashboardScreen() {
   const router = useRouter();
+  const segments = useSegments();
   const insets = useSafeAreaInsets();
   const [isLoading, setIsLoading] = useState(true);
   const [user, setUser] = useState<any>(null);
@@ -157,8 +160,11 @@ export default function DashboardScreen() {
     const { data: authListener } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (event === "SIGNED_OUT" || !session) {
-          // Clear cache on logout
+          // Clear all caches on logout
           await clearAgentDataCache();
+          await clearDashboardDataCache();
+          await clearNotificationsCache();
+          await clearRegistrationsCache();
           router.replace("/" as any);
         }
       }
@@ -383,18 +389,24 @@ export default function DashboardScreen() {
   const loadUserData = async () => {
     setIsLoading(true);
     try {
-      // Check if online
-      const online = await isOnline();
+      // Check if online (with timeout to prevent hanging)
+      // Use Promise.race to ensure it doesn't hang when offline
+      const onlinePromise = isOnline();
+      const timeoutPromise = new Promise<boolean>((resolve) => {
+        setTimeout(() => resolve(false), 3000); // 3 second max for initial check
+      });
+      const online = await Promise.race([onlinePromise, timeoutPromise]);
       setIsOffline(!online);
 
-      // Get current user
+      // Get current user - use getSession() which works offline
       const {
-        data: { user: currentUser },
-        error: userError,
-      } = await supabase.auth.getUser();
+        data: { session },
+      } = await supabase.auth.getSession();
+      
+      const currentUser = session?.user;
 
-      if (userError || !currentUser) {
-        // No user - clear cache and redirect to login
+      if (!currentUser) {
+        // No user session - clear cache and redirect to login
         await clearAgentDataCache();
         await clearDashboardDataCache();
         router.replace("/login" as any);
@@ -440,8 +452,9 @@ export default function DashboardScreen() {
           const cachedAgentData = await getCachedAgentData();
           if (cachedAgentData) {
             setAgentData(cachedAgentData);
-            setIsLoading(false);
           }
+          // Always set loading to false, even if no cache (prevents infinite loading)
+          setIsLoading(false);
           return;
         }
       }
@@ -772,13 +785,6 @@ export default function DashboardScreen() {
           </View>
         )}
         
-        {/* Offline Indicator */}
-        {isOffline && (
-          <View style={styles.offlineBanner}>
-            <Text style={styles.offlineText}>📴 Offline - Showing cached data</Text>
-          </View>
-        )}
-        
         <ScrollView
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
@@ -844,6 +850,12 @@ export default function DashboardScreen() {
           <TouchableOpacity
             style={styles.notificationButton}
             onPress={() => {
+              // Check if we're already on notifications screen to avoid duplicate stack entries
+              const currentRoute = segments[segments.length - 1];
+              if (currentRoute === "notifications") {
+                // Already on notifications, don't navigate
+                return;
+              }
               router.push("/notifications" as any);
             }}
             activeOpacity={0.7}
@@ -1066,7 +1078,7 @@ const createStyles = () => {
   scrollContent: {
     paddingHorizontal: 10,
     paddingTop: 0,
-    paddingBottom: 40,
+    paddingBottom: scaleHeight(100), // Add bottom padding to prevent navbar overlap
   },
   header: {
     backgroundColor: "#FFFFFF",
@@ -1347,18 +1359,6 @@ const createStyles = () => {
   },
   syncStatusUnknown: {
     color: "#999999",
-  },
-  offlineBanner: {
-    backgroundColor: "#FF9800",
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  offlineText: {
-    color: "#FFFFFF",
-    fontSize: 12,
-    fontFamily: "Inter_500Medium",
   },
   emptyState: {
     backgroundColor: "#FFFFFF",

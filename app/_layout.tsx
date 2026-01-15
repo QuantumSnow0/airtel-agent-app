@@ -1,14 +1,14 @@
 import * as Linking from "expo-linking";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { useEffect, useState } from "react";
-import { ActivityIndicator, StyleSheet, View } from "react-native";
+import { ActivityIndicator, StatusBar, StyleSheet, View } from "react-native";
 import { checkAppVersion } from "../lib/services/appVersionService";
 import {
-    getDeviceToken,
-    getLastNotificationResponse,
-    registerDeviceToken,
-    requestNotificationPermissions,
-    setupNotificationListeners,
+  getDeviceToken,
+  getLastNotificationResponse,
+  registerDeviceToken,
+  requestNotificationPermissions,
+  setupNotificationListeners,
 } from "../lib/services/pushNotificationService";
 import { supabase } from "../lib/supabase";
 
@@ -21,15 +21,47 @@ export default function RootLayout() {
 
   useEffect(() => {
     let isMounted = true;
+    let sessionChecked = false;
 
-    // Always show app after max 1 second - NEVER get stuck
-    // This timer always fires regardless of what happens with session check
-    const maxLoadTimer = setTimeout(() => {
-      console.log("Max load time reached (1s) - showing app");
+    // Check session immediately (from local storage - very fast)
+    // This prevents showing welcome page if user is already signed in
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      sessionChecked = true;
+      if (session?.user && isMounted) {
+        // User is signed in - redirect immediately to dashboard
+        console.log("✅ Session found - redirecting to dashboard");
+        handleAuthChange(session).then(() => {
+          // After navigation, clear loading
+          if (isMounted) {
+            setIsInitializing(false);
+          }
+        }).catch((error) => {
+          console.error("Error in handleAuthChange:", error);
+          if (isMounted) {
+            setIsInitializing(false);
+          }
+        });
+      } else {
+        // No session - show welcome page
+        if (isMounted) {
+          setIsInitializing(false);
+        }
+      }
+    }).catch((error) => {
+      console.error("Error getting session:", error);
+      sessionChecked = true;
       if (isMounted) {
         setIsInitializing(false);
       }
-    }, 1000); // 1 second absolute maximum
+    });
+
+    // Fallback timer - if session check takes too long, show app anyway
+    const maxLoadTimer = setTimeout(() => {
+      if (isMounted && !sessionChecked) {
+        console.log("Max load time reached (500ms) - showing app");
+        setIsInitializing(false);
+      }
+    }, 500); // 500ms fallback - shorter since getSession() is fast
 
     // Check app version first (before session check)
     checkAppVersion()
@@ -56,28 +88,6 @@ export default function RootLayout() {
         // On error, allow app to continue
       });
 
-    // Try to get session quickly in parallel (don't wait for it)
-    // If it completes quickly, clear loading early. Otherwise, maxLoadTimer will handle it.
-    checkSession()
-      .then(() => {
-        if (isMounted && !isBlocked) {
-          clearTimeout(maxLoadTimer);
-          setIsInitializing(false);
-        }
-      })
-      .catch((error) => {
-        console.error("Session check error:", error);
-        if (isMounted && !isBlocked) {
-          clearTimeout(maxLoadTimer);
-          setIsInitializing(false);
-        }
-      })
-      .finally(() => {
-        // Ensure loading is cleared even if timer already fired
-        if (isMounted && !isBlocked) {
-          clearTimeout(maxLoadTimer);
-        }
-      });
 
     // Listen for auth state changes
     const {
@@ -161,7 +171,7 @@ export default function RootLayout() {
 
       // If we have a valid session, try to redirect immediately
       if (session?.user) {
-        // Redirect immediately - index.tsx will also check and redirect
+        // Redirect immediately - handleAuthChange will navigate to dashboard
         handleAuthChange(session).catch((error) => {
           console.error("Error in handleAuthChange:", error);
           // Ignore errors - individual screens will handle their own auth checks
@@ -288,10 +298,23 @@ export default function RootLayout() {
       );
 
       // Check if app was opened from a notification
+      // Only handle if app was actually opened from notification (not on every startup)
+      // This prevents redirecting to notifications on normal app startup
       const lastResponse = await getLastNotificationResponse();
       if (lastResponse) {
-        console.log("📱 App opened from notification");
-        handleNotificationTap(lastResponse);
+        // Check if notification was tapped recently (within last 5 seconds)
+        // This ensures we only navigate if user actually tapped a notification
+        const notificationTime = lastResponse.notification.date || 0;
+        const now = Date.now();
+        const timeSinceNotification = now - notificationTime;
+        
+        // Only navigate if notification was tapped very recently (within 5 seconds)
+        if (timeSinceNotification < 5000) {
+          console.log("📱 App opened from notification tap");
+          handleNotificationTap(lastResponse);
+        } else {
+          console.log("📱 Notification response found but too old, ignoring");
+        }
       }
 
       // Cleanup on unmount
@@ -421,11 +444,14 @@ export default function RootLayout() {
   }
 
   return (
-    <Stack
-      screenOptions={{
-        headerShown: false,
-      }}
-    />
+    <>
+      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+      <Stack
+        screenOptions={{
+          headerShown: false,
+        }}
+      />
+    </>
   );
 }
 

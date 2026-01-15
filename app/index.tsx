@@ -17,7 +17,6 @@ import { Inter_400Regular, Inter_500Medium } from "@expo-google-fonts/inter";
 
 export default function WelcomeScreen() {
   const router = useRouter();
-  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
 
   const [fontsLoaded] = useFonts({
     Poppins_600SemiBold,
@@ -26,28 +25,9 @@ export default function WelcomeScreen() {
     Inter_500Medium,
   });
 
-  useEffect(() => {
-    // Immediately check if user is already logged in
-    const checkAuth = async () => {
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session?.user) {
-          // User is logged in - redirect to dashboard immediately
-          router.replace("/dashboard" as any);
-          return;
-        }
-      } catch (error) {
-        console.error("Error checking auth:", error);
-      } finally {
-        setIsCheckingAuth(false);
-      }
-    };
-
-    checkAuth();
-  }, [router]);
-
-  // Show loading while checking auth or loading fonts
-  if (isCheckingAuth || !fontsLoaded) {
+  // Show loading only while loading fonts
+  // Auth check is handled by _layout.tsx to avoid double loading screens
+  if (!fontsLoaded) {
     return (
       <View style={styles.container}>
         <ActivityIndicator size="large" color="#0066CC" />
@@ -172,6 +152,7 @@ const styles = StyleSheet.create({
   buttonContainer: {
     paddingTop: 20,
     paddingBottom: 20,
+    marginBottom: scaleHeight(80), // Add bottom margin to prevent navbar overlap
   },
   button: {
     backgroundColor: "#0066CC",

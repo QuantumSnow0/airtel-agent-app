@@ -34,6 +34,12 @@ import {
 } from "../lib/utils/responsive";
 import { getPendingRegistrations, initOfflineStorage } from "../lib/services/offlineStorage";
 import {
+  getCachedRegistrations,
+  saveRegistrationsToCache,
+  clearRegistrationsCache,
+  CachedRegistration,
+} from "../lib/cache/registrationsCache";
+import {
   syncRegistrationFromSupabase,
   syncAllUnsyncedRegistrations,
   syncPendingRegistrations,
@@ -105,15 +111,53 @@ export default function RegistrationsScreen() {
     try {
       setIsLoading(true);
 
-      // Get current user
+      // Get current user - use getSession() which works offline
       const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
+        data: { session },
+      } = await supabase.auth.getSession();
+      
+      const user = session?.user;
 
-      if (userError || !user) {
+      if (!user) {
         router.replace("/login" as any);
         return;
+      }
+
+      // Check if online
+      const online = await isOnline();
+
+      // If offline, load from cache
+      if (!online) {
+        console.log("📴 Offline - loading registrations from cache");
+        const cachedRegistrations = await getCachedRegistrations();
+        if (cachedRegistrations) {
+          // Apply filter to cached data
+          let filtered = cachedRegistrations;
+          if (filter !== "all") {
+            filtered = cachedRegistrations.filter((reg) => reg.status === filter);
+          }
+          setAllRegistrations(filtered as Registration[]);
+          setTotalCount(filtered.length);
+        } else {
+          // No cache available
+          setAllRegistrations([]);
+          setTotalCount(0);
+        }
+        setIsLoading(false);
+        return;
+      }
+
+      // Online - Try to load cached data first (for fast initial display)
+      const cachedRegistrations = await getCachedRegistrations();
+      if (cachedRegistrations) {
+        // Apply filter to cached data
+        let filtered = cachedRegistrations;
+        if (filter !== "all") {
+          filtered = cachedRegistrations.filter((reg) => reg.status === filter);
+        }
+        setAllRegistrations(filtered as Registration[]);
+        setTotalCount(filtered.length);
+        setIsLoading(false); // Show cached data immediately
       }
 
       // Build query - Only fetch non-sensitive data for privacy compliance
@@ -165,6 +209,37 @@ export default function RegistrationsScreen() {
         };
       });
 
+      // Save to cache (save all registrations, not filtered)
+      // First, get all registrations for cache
+      const allQuery = supabase
+        .from("customer_registrations")
+        .select("id, customer_name, preferred_package, installation_town, status, created_at, ms_forms_response_id, ms_forms_submitted_at")
+        .eq("agent_id", user.id)
+        .order("created_at", { ascending: false });
+
+      const { data: allData } = await allQuery;
+      if (allData) {
+        const allEnhanced = allData.map((reg: any) => {
+          const hasMSFormsId = !!reg.ms_forms_response_id;
+          const hasMSFormsSubmittedAt = !!reg.ms_forms_submitted_at;
+          let syncStatus: "synced" | "pending" | "not_synced" = "not_synced";
+          if (hasMSFormsId && hasMSFormsSubmittedAt) {
+            syncStatus = "synced";
+          } else if (!hasMSFormsId) {
+            const createdAt = reg.created_at ? new Date(reg.created_at).getTime() : 0;
+            const now = Date.now();
+            const fiveMinutesAgo = now - 5 * 60 * 1000;
+            if (createdAt > fiveMinutesAgo) {
+              syncStatus = "pending";
+            } else {
+              syncStatus = "not_synced";
+            }
+          }
+          return { ...reg, syncStatus };
+        });
+        await saveRegistrationsToCache(allEnhanced);
+      }
+
       setAllRegistrations(enhancedRegistrations);
       
       // Set total count (for the current filter, not search)
@@ -173,7 +248,18 @@ export default function RegistrationsScreen() {
       // Note: Search filtering is handled by the useEffect hook above
     } catch (error: any) {
       console.error("Error loading registrations:", error);
-      Alert.alert("Error", "Failed to load registrations");
+      // Try to load from cache on error
+      const cachedRegistrations = await getCachedRegistrations();
+      if (cachedRegistrations) {
+        let filtered = cachedRegistrations;
+        if (filter !== "all") {
+          filtered = cachedRegistrations.filter((reg) => reg.status === filter);
+        }
+        setAllRegistrations(filtered as Registration[]);
+        setTotalCount(filtered.length);
+      } else {
+        Alert.alert("Error", "Failed to load registrations");
+      }
     } finally {
       setIsLoading(false);
     }

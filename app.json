@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "airtel-agents-app",
+    "name": "airtel 5G agents",
     "slug": "airtel-agents-app",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -15,10 +15,13 @@
       "package": "com.airtel.agents",
       "googleServicesFile": "./google-services.json",
       "versionCode": 1,
+      "statusBar": {
+        "barStyle": "dark-content",
+        "backgroundColor": "#FFFFFF"
+      },
       "adaptiveIcon": {
-        "backgroundColor": "#FFFFFF",
+        "backgroundColor": "#0b4de0",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
@@ -64,7 +67,7 @@
       [
         "expo-notifications",
         {
-          "icon": "./assets/images/icon.png",
+          "icon": "./assets/images/android-icon-monochrome.png",
           "color": "#0066CC",
           "sounds": []
         }
