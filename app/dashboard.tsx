@@ -194,13 +194,15 @@ export default function DashboardScreen() {
           showToast(`Syncing offline data... ${current} of ${total}`, "info");
         }
       },
-      (result) => {
+      async (result) => {
         // Refresh data after sync completes if any were synced
         if (result.synced > 0) {
           console.log(`🔄 ${result.synced} registrations synced - refreshing dashboard`);
           showToast(`${result.synced} registration(s) synced successfully!`, "success");
+          // Small delay to ensure database is fully updated before refreshing
+          await new Promise(resolve => setTimeout(resolve, 500));
           // Refresh customer data to show newly synced registrations
-          loadCustomerData(user.id);
+          await loadCustomerData(user.id);
         } else if (result.failed > 0) {
           showToast(`${result.failed} registration(s) failed to sync`, "error");
         }
@@ -688,57 +690,88 @@ export default function DashboardScreen() {
         return;
       }
 
+      // Check for pending offline registrations first
+      const pending = await getPendingRegistrations(agentId);
+      const pendingIds = new Set(pending.map(p => p.id));
+      setPendingSyncRegistrations(pendingIds);
+
+      // Convert pending registrations to display format
+      const pendingRegistrations = pending.map((p: any) => ({
+        id: p.id,
+        customer_name: p.customerData.customerName,
+        status: "pending" as const,
+        created_at: p.created_at,
+        ms_forms_response_id: undefined,
+        ms_forms_submitted_at: undefined,
+        syncStatus: "pending" as const,
+      }));
+
       // Fetch customer registrations (include MS Forms submission status)
+      // Increase limit to 15 to account for pending registrations that might be filtered out
       const { data: registrations, error: regError } = await supabase
         .from("customer_registrations")
         .select("id, customer_name, status, created_at, ms_forms_response_id, ms_forms_submitted_at")
         .eq("agent_id", agentId)
         .order("created_at", { ascending: false })
-        .limit(10);
+        .limit(15);
 
       if (regError) {
         console.error("Error loading registrations:", regError);
-      } else {
-        // Check for pending offline registrations and merge status
-        const pending = await getPendingRegistrations(agentId);
-        const pendingIds = new Set(pending.map(p => p.id));
-        setPendingSyncRegistrations(pendingIds);
-        
-        // Enhance registrations with sync status
-        const enhancedRegistrations = (registrations || []).map((reg: any) => {
-          const hasMSFormsId = !!reg.ms_forms_response_id;
-          const hasMSFormsSubmittedAt = !!reg.ms_forms_submitted_at;
-          
-          // Determine sync status
-          let syncStatus: "synced" | "pending" | "not_synced" = "not_synced";
-          
-          if (hasMSFormsId && hasMSFormsSubmittedAt) {
-            // Successfully synced to both Supabase and MS Forms
-            syncStatus = "synced";
-          } else if (!hasMSFormsId) {
-            // Not synced to MS Forms yet
-            // Check if it was created recently (might be syncing)
-            const createdAt = reg.created_at ? new Date(reg.created_at).getTime() : 0;
-            const now = Date.now();
-            const fiveMinutesAgo = now - 5 * 60 * 1000; // 5 minutes
-            
-            if (createdAt > fiveMinutesAgo) {
-              // Recently created, likely pending sync
-              syncStatus = "pending";
-            } else {
-              // Older registration without MS Forms ID - not synced
-              syncStatus = "not_synced";
-            }
-          }
-          
-          return {
-            ...reg,
-            syncStatus,
-          };
-        });
-        
-        setRecentRegistrations(enhancedRegistrations);
+        // If error but we have pending, show those
+        if (pendingRegistrations.length > 0) {
+          setRecentRegistrations(pendingRegistrations.slice(0, 10));
+        }
+        return;
       }
+      
+      // Enhance registrations with sync status
+      const enhancedRegistrations = (registrations || []).map((reg: any) => {
+        const hasMSFormsId = !!reg.ms_forms_response_id;
+        const hasMSFormsSubmittedAt = !!reg.ms_forms_submitted_at;
+        
+        // Determine sync status
+        let syncStatus: "synced" | "pending" | "not_synced" = "not_synced";
+        
+        if (hasMSFormsId && hasMSFormsSubmittedAt) {
+          // Successfully synced to both Supabase and MS Forms
+          syncStatus = "synced";
+        } else if (!hasMSFormsId) {
+          // Not synced to MS Forms yet
+          // Check if it was created recently (might be syncing)
+          const createdAt = reg.created_at ? new Date(reg.created_at).getTime() : 0;
+          const now = Date.now();
+          const fiveMinutesAgo = now - 5 * 60 * 1000; // 5 minutes
+          
+          if (createdAt > fiveMinutesAgo) {
+            // Recently created, likely pending sync
+            syncStatus = "pending";
+          } else {
+            // Older registration without MS Forms ID - not synced
+            syncStatus = "not_synced";
+          }
+        }
+        
+        return {
+          ...reg,
+          syncStatus,
+        };
+      });
+
+      // Merge pending offline registrations with Supabase registrations
+      // Exclude any that are already in the database (by ID)
+      const allRegistrationsCombined = [
+        ...pendingRegistrations,
+        ...enhancedRegistrations.filter((reg) => !pendingIds.has(reg.id)),
+      ].sort((a, b) => {
+        // Sort by created_at descending (most recent first)
+        const dateA = new Date(a.created_at).getTime();
+        const dateB = new Date(b.created_at).getTime();
+        return dateB - dateA;
+      });
+
+      // Take top 10 for recent registrations
+      const top10Registrations = allRegistrationsCombined.slice(0, 10);
+      setRecentRegistrations(top10Registrations);
 
       // Calculate stats with premium/standard breakdown
       const { count: totalRegistered, error: countError } = await supabase
@@ -809,6 +842,8 @@ export default function DashboardScreen() {
 
       // Save to cache when online
       if (online && agentData) {
+        // Use the top10Registrations we just set
+        const registrationsForCache = allRegistrationsCombined.slice(0, 10);
         await saveDashboardDataToCache({
           agentData,
           balance: balance ?? 0,
@@ -818,7 +853,7 @@ export default function DashboardScreen() {
           standardRegistered: standardRegistered ?? 0,
           premiumInstalled: premiumInstalled ?? 0,
           standardInstalled: standardInstalled ?? 0,
-          recentRegistrations: recentRegistrations,
+          recentRegistrations: registrationsForCache,
         });
       }
     } catch (error) {

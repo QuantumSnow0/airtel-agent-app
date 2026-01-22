@@ -367,7 +367,7 @@ export default function VerifyEmailScreen() {
         type: "signup",
         email: emailToUse,
         options: {
-          emailRedirectTo: "airtelagentsapp://verify-email",
+          emailRedirectTo: "wamapps://verify-email",
         },
       });
 

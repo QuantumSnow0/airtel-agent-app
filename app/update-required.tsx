@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -6,9 +6,10 @@ import {
   TouchableOpacity,
   Linking,
   Platform,
+  BackHandler,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useRouter, usePathname } from "expo-router";
 import { useFonts } from "expo-font";
 import {
   Poppins_600SemiBold,
@@ -19,7 +20,7 @@ import {
   Inter_500Medium,
   Inter_600SemiBold,
 } from "@expo-google-fonts/inter";
-import { openAppStore, getCurrentAppVersion } from "../lib/services/appVersionService";
+import { openAppStore, getCurrentAppVersion, checkAppVersion } from "../lib/services/appVersionService";
 import {
   getCardPadding,
   getResponsivePadding,
@@ -30,8 +31,10 @@ import {
 
 export default function UpdateRequiredScreen() {
   const router = useRouter();
+  const pathname = usePathname();
   const insets = useSafeAreaInsets();
   const { version } = getCurrentAppVersion();
+  const versionCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const [fontsLoaded] = useFonts({
     Poppins_600SemiBold,
@@ -40,6 +43,54 @@ export default function UpdateRequiredScreen() {
     Inter_500Medium,
     Inter_600SemiBold,
   });
+
+  // Prevent back button on Android
+  useEffect(() => {
+    const backHandler = BackHandler.addEventListener("hardwareBackPress", () => {
+      // Block back button - user must update
+      return true; // Prevent default back behavior
+    });
+
+    return () => backHandler.remove();
+  }, []);
+
+  // Periodically check if version is still blocked and redirect back if user navigates away
+  useEffect(() => {
+    const checkVersionPeriodically = async () => {
+      const versionCheck = await checkAppVersion();
+      if (versionCheck.isBlocked) {
+        // Still blocked - ensure we're on update-required screen
+        if (pathname !== "/update-required") {
+          console.log("🚫 Version still blocked - redirecting back to update-required");
+          router.replace("/update-required" as any);
+        }
+      }
+    };
+
+    // Check every 2 seconds to catch any navigation attempts
+    versionCheckIntervalRef.current = setInterval(checkVersionPeriodically, 2000);
+
+    return () => {
+      if (versionCheckIntervalRef.current) {
+        clearInterval(versionCheckIntervalRef.current);
+      }
+    };
+  }, [router, pathname]);
+
+  // Check version whenever pathname changes (user navigated away)
+  useEffect(() => {
+    if (pathname !== "/update-required") {
+      const checkAndRedirect = async () => {
+        const versionCheck = await checkAppVersion();
+        if (versionCheck.isBlocked) {
+          // Still blocked - force back to update-required
+          console.log("🚫 Version blocked - forcing stay on update-required screen");
+          router.replace("/update-required" as any);
+        }
+      };
+      checkAndRedirect();
+    }
+  }, [pathname, router]);
 
   const handleUpdate = async () => {
     await openAppStore();

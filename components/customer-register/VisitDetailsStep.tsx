@@ -3,6 +3,7 @@ import { Controller, Control } from "react-hook-form";
 import { CustomerRegistrationFormData } from "@/lib/validation/customerRegistrationSchemas";
 import { registerStyles } from "../register/styles";
 import { useState } from "react";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 interface VisitDetailsStepProps {
   control: Control<CustomerRegistrationFormData>;
@@ -53,6 +54,7 @@ const getFirstDayOfMonth = (year: number, month: number): number => {
 };
 
 export default function VisitDetailsStep({ control }: VisitDetailsStepProps) {
+  const insets = useSafeAreaInsets();
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
@@ -311,7 +313,7 @@ export default function VisitDetailsStep({ control }: VisitDetailsStepProps) {
                         gap: 12,
                         paddingHorizontal: 20,
                         paddingTop: 12,
-                        paddingBottom: 20,
+                        paddingBottom: Math.max(insets.bottom, 20),
                         borderTopWidth: 1,
                         borderTopColor: "#F0F0F0",
                       }}
@@ -469,6 +471,7 @@ export default function VisitDetailsStep({ control }: VisitDetailsStepProps) {
                         backgroundColor: "#F0F0F0",
                         alignItems: "center",
                         marginTop: 12,
+                        marginBottom: Math.max(insets.bottom, 0),
                       }}
                       onPress={() => setShowTimePicker(false)}
                     >

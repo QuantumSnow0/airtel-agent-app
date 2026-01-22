@@ -131,6 +131,20 @@ export default function ProfileScreen() {
 
   useEffect(() => {
     loadProfileData();
+
+    // Listen for auth state changes to handle logout immediately
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === "SIGNED_OUT" || !session) {
+        // User signed out - navigate immediately
+        router.replace("/login" as any);
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
   }, []);
 
   const loadProfileData = async () => {
@@ -259,8 +273,17 @@ export default function ProfileScreen() {
               await clearRegistrationsCache();
 
               // Sign out from Supabase
-              // The auth state change listener in _layout.tsx will handle navigation
-              await supabase.auth.signOut();
+              const { error } = await supabase.auth.signOut();
+              
+              if (error) {
+                console.error("Error logging out:", error);
+                Alert.alert("Error", "Failed to logout. Please try again.");
+                return;
+              }
+
+              // Navigate immediately after successful sign out
+              // The auth state change listener will also handle this, but this ensures immediate navigation
+              router.replace("/login" as any);
             } catch (error) {
               console.error("Error logging out:", error);
               Alert.alert("Error", "Failed to logout. Please try again.");

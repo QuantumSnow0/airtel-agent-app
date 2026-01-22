@@ -8,6 +8,8 @@ Notifications.setNotificationHandler({
     shouldShowAlert: true,
     shouldPlaySound: true,
     shouldSetBadge: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
   }),
 });
 
@@ -43,9 +45,9 @@ export async function requestNotificationPermissions(): Promise<boolean> {
 export async function getDeviceToken(): Promise<string | null> {
   try {
     console.log("📱 Getting Expo push token...");
-    console.log("📋 Project ID: 4de293ef-2f4e-4ac6-8b8a-ae84514dc103");
+    console.log("📋 Project ID: 79ca40ff-774f-4322-bf65-0adc31b78223");
     const tokenData = await Notifications.getExpoPushTokenAsync({
-      projectId: "4de293ef-2f4e-4ac6-8b8a-ae84514dc103", // From app.json
+      projectId: "79ca40ff-774f-4322-bf65-0adc31b78223", // From app.json
     });
     console.log("✅ Token obtained, length:", tokenData.data?.length || 0);
     return tokenData.data;

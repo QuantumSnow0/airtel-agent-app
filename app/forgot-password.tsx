@@ -96,7 +96,7 @@ export default function ForgotPasswordScreen() {
       const { error } = await supabase.auth.resetPasswordForEmail(
         data.email,
         {
-          redirectTo: "airtelagentsapp://reset-password",
+          redirectTo: "wamapps://reset-password",
         }
       );
 

@@ -235,7 +235,7 @@ export default function RegisterScreen() {
         password: formData.personalInfo.password,
         options: {
           // Request OTP instead of confirmation link
-          emailRedirectTo: "airtelagentsapp://verify-email",
+          emailRedirectTo: "wamapps://verify-email",
           // Store additional user metadata
           data: {
             name: formData.personalInfo.name,

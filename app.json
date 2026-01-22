@@ -1,26 +1,26 @@
 {
   "expo": {
-    "name": "airtel 5G agents",
-    "slug": "airtel-agents-app",
+    "name": "WAM Apps",
+    "slug": "wam-apps",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "airtelagentsapp",
+    "scheme": "wamapps",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true
     },
     "android": {
-      "package": "com.airtel.agents",
+      "package": "com.wam.apps",
       "googleServicesFile": "./google-services.json",
-      "versionCode": 1,
+      "versionCode": 3,
       "statusBar": {
         "barStyle": "dark-content",
         "backgroundColor": "#FFFFFF"
       },
       "adaptiveIcon": {
-        "backgroundColor": "#0b4de0",
+        "backgroundColor": "#FFFFFF",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
@@ -36,7 +36,7 @@
           "autoVerify": true,
           "data": [
             {
-              "scheme": "airtelagentsapp"
+              "scheme": "wamapps"
             }
           ],
           "category": [
@@ -68,7 +68,7 @@
         "expo-notifications",
         {
           "icon": "./assets/images/android-icon-monochrome.png",
-          "color": "#0066CC",
+          "color": "#FFFFFF",
           "sounds": []
         }
       ]
@@ -80,7 +80,7 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "4de293ef-2f4e-4ac6-8b8a-ae84514dc103"
+        "projectId": "79ca40ff-774f-4322-bf65-0adc31b78223"
       }
     }
   }

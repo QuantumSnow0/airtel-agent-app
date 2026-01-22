@@ -65,11 +65,11 @@ export default function WelcomeScreen() {
         {/* Content Section */}
         <View style={styles.contentContainer}>
           <Text style={styles.subtitle}>
-            Register customers for Airtel 5G SmartConnect
+            Register customers for 5G SmartConnect
           </Text>
 
           <Text style={styles.description}>
-            Join our network of field agents and help expand Airtel's reach.
+            Join our network of field agents and help expand our reach.
             Register customers on the go and earn commission for successful
             installations.
           </Text>

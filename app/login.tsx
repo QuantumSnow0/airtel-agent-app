@@ -171,7 +171,7 @@ export default function LoginScreen() {
         type: "signup",
         email: unverifiedEmail,
         options: {
-          emailRedirectTo: "airtelagentsapp://verify-email",
+          emailRedirectTo: "wamapps://verify-email",
         },
       });
 
