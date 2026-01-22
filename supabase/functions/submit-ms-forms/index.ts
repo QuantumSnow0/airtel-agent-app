@@ -15,7 +15,7 @@ function cleanEnvVar(value: string | undefined, defaultValue: string): string {
 // Microsoft Forms Configuration (set as Edge Function secrets)
 const MS_FORMS_FORM_ID = cleanEnvVar(
   Deno.env.get("MS_FORMS_FORM_ID"),
-  "JzfHFpyXgk2zp-tqL93-V1fdJne7SIlMnh7yZpkW8f5UQjc4M0wwWU9HRTJPRjMxWlc5QjRLOUhaMC4u"
+  "JzfHFpyXgk2zp-tqL93-V1fdJne7SIlMnh7yZpkW8f5UNE5JMkcyMEtYSDhZUEdZUVoyUDZBSlA1Wi4u"
 );
 const MS_FORMS_TENANT_ID = cleanEnvVar(
   Deno.env.get("MS_FORMS_TENANT_ID"),
@@ -26,10 +26,18 @@ const MS_FORMS_USER_ID = cleanEnvVar(
   "7726dd57-48bb-4c89-9e1e-f2669916f1fe"
 );
 // Response page URL (optional - will be constructed from form ID if not provided)
-const MS_FORMS_RESPONSE_PAGE_URL = cleanEnvVar(
-  Deno.env.get("MS_FORMS_RESPONSE_PAGE_URL"),
-  `https://forms.office.com/pages/responsepage.aspx?id=${MS_FORMS_FORM_ID}&route=shorturl`
-);
+// Always construct from form ID to ensure it's complete
+const MS_FORMS_RESPONSE_PAGE_URL = (() => {
+  const customUrl = Deno.env.get("MS_FORMS_RESPONSE_PAGE_URL");
+  if (customUrl && customUrl.trim() && customUrl.includes(`id=${MS_FORMS_FORM_ID}`)) {
+    // Use custom URL only if it contains the complete form ID
+    return cleanEnvVar(customUrl, "");
+  }
+  // Always construct from form ID to ensure it's complete
+  const constructedUrl = `https://forms.office.com/pages/responsepage.aspx?id=${MS_FORMS_FORM_ID}&route=shorturl`;
+  console.log("🔧 Constructed MS Forms Response Page URL:", constructedUrl);
+  return constructedUrl;
+})();
 
 // Question IDs for Microsoft Forms
 const QUESTION_IDS = {
@@ -197,13 +205,15 @@ serve(async (req) => {
 
 
     // Step 1: Fetch tokens and cookies from Microsoft Forms
-    console.log("🔍 Fetching tokens from:", MS_FORMS_RESPONSE_PAGE_URL);
+    console.log("🔍 Form ID:", MS_FORMS_FORM_ID ? MS_FORMS_FORM_ID.substring(0, 30) + "..." : "MISSING");
+    console.log("🔍 Response Page URL:", MS_FORMS_RESPONSE_PAGE_URL);
+    console.log("🔍 URL contains form ID:", MS_FORMS_RESPONSE_PAGE_URL.includes(MS_FORMS_FORM_ID));
     
     const tokenResponse = await fetch(MS_FORMS_RESPONSE_PAGE_URL, {
       method: "GET",
       headers: {
         "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
         Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
         "Accept-Encoding": "gzip, deflate, br, zstd",
@@ -451,7 +461,7 @@ serve(async (req) => {
     });
     
     const encodedFormId = encodeURIComponent(MS_FORMS_FORM_ID);
-    const msFormsUrl = `https://forms.guest.usercontent.microsoft/formapi/api/${finalTenantId}/users/${finalUserId}/forms(%27${encodedFormId}%27)/responses`;
+    const msFormsUrl = `https://forms.office.com/formapi/api/${finalTenantId}/users/${finalUserId}/forms(%27${encodedFormId}%27)/responses`;
 
     // ⚠️ CRITICAL: answers must be a STRINGIFIED STRING (as per Next.js working code)
     // The Next.js logs show: "answers": "[{...}]" - it's a JSON string, not an array!
@@ -534,20 +544,19 @@ serve(async (req) => {
       authorization: "",
       Connection: "keep-alive",
       "Content-Type": "application/json",
-      Host: "forms.guest.usercontent.microsoft",
+      Host: "forms.office.com",
       "odata-maxverion": "4.0",
       "odata-version": "4.0",
-      Origin: "https://forms.cloud.microsoft",
-      Referer: "https://forms.cloud.microsoft/",
-      "sec-ch-ua":
-        '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
+      Origin: "https://forms.office.com",
+      Referer: `https://forms.office.com/pages/responsepage.aspx?id=${MS_FORMS_FORM_ID}&route=shorturl`,
+      "sec-ch-ua": '"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
       "sec-ch-ua-mobile": "?0",
       "sec-ch-ua-platform": '"Windows"',
       "Sec-Fetch-Dest": "empty",
       "Sec-Fetch-Mode": "cors",
-      "Sec-Fetch-Site": "cross-site",
+      "Sec-Fetch-Site": "same-origin",
       "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
       "x-correlationid": correlationId,
       "x-ms-form-muid": muid || "",
       "x-ms-form-request-ring": "business",

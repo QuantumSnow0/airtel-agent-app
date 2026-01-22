@@ -28,7 +28,7 @@ import {
 // Microsoft Forms Configuration
 const MS_FORMS_FORM_ID =
   process.env.EXPO_PUBLIC_MS_FORMS_FORM_ID ||
-  "JzfHFpyXgk2zp-tqL93-V1fdJne7SIlMnh7yZpkW8f5UQjc4M0wwWU9HRTJPRjMxWlc5QjRLOUhaMC4u";
+  "JzfHFpyXgk2zp-tqL93-V1fdJne7SIlMnh7yZpkW8f5UNE5JMkcyMEtYSDhZUEdZUVoyUDZBSlA1Wi4u";
 const MS_FORMS_TENANT_ID =
   process.env.EXPO_PUBLIC_MS_FORMS_TENANT_ID ||
   "16c73727-979c-4d82-b3a7-eb6a2fddfe57";
@@ -126,7 +126,7 @@ export async function fetchMSTokens(
     method: "GET",
     headers: {
       "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
       Accept:
         "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       "Accept-Language": "en-US,en;q=0.9",
@@ -472,6 +472,25 @@ export function buildMSFormsPayload(
   const fullPackageName = getPackageName(customerData.preferredPackage);
   const time24Hour = convertTo24Hour(customerData.visitTime);
 
+  // ⚠️ CRITICAL: Convert visitDate from M/d/yyyy (React Native format) to YYYY-MM-DD (Microsoft Forms format)
+  // React Native sends: "1/13/2026" -> Microsoft Forms expects: "2026-01-13"
+  let formattedVisitDate = customerData.visitDate;
+  try {
+    // If already in YYYY-MM-DD format, return as-is
+    if (/^\d{4}-\d{2}-\d{2}$/.test(customerData.visitDate)) {
+      formattedVisitDate = customerData.visitDate;
+    } else {
+      // Convert from M/d/yyyy to YYYY-MM-DD
+      const [month, day, year] = customerData.visitDate.split("/").map(Number);
+      const date = new Date(year, month - 1, day);
+      if (!isNaN(date.getTime())) {
+        formattedVisitDate = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+      }
+    }
+  } catch (e) {
+    console.warn("⚠️ Failed to convert date format, using original:", customerData.visitDate);
+  }
+
   // Internal defaults
   const internalDefaults = {
     agentType: "Enterprise",
@@ -535,7 +554,7 @@ export function buildMSFormsPayload(
     },
     {
       questionId: QUESTION_IDS.visitDate,
-      answer1: customerData.visitDate, // Format: M/d/yyyy
+      answer1: formattedVisitDate, // Format: YYYY-MM-DD
     },
     {
       questionId: QUESTION_IDS.visitTime,
@@ -576,7 +595,7 @@ export async function submitToMSForms(
 ): Promise<MSFormsSubmissionResult> {
   // URL encode the form ID - note: single quotes in URL are encoded as %27
   const encodedFormId = encodeURIComponent(formId);
-  const msFormsUrl = `https://forms.guest.usercontent.microsoft/formapi/api/${tenantId}/users/${userId}/forms(%27${encodedFormId}%27)/responses`;
+  const msFormsUrl = `https://forms.office.com/formapi/api/${tenantId}/users/${userId}/forms(%27${encodedFormId}%27)/responses`;
 
   // ⚠️ CRITICAL: payload.answers is already a stringified string from buildMSFormsPayload
   // Next.js working code sends it as a STRING, not an array!
@@ -651,20 +670,19 @@ export async function submitToMSForms(
       authorization: "",
       Connection: "keep-alive",
       "Content-Type": "application/json",
-      Host: "forms.guest.usercontent.microsoft",
+      Host: "forms.office.com",
       "odata-maxverion": "4.0",
       "odata-version": "4.0",
-      Origin: "https://forms.cloud.microsoft",
-      Referer: "https://forms.cloud.microsoft/",
-      "sec-ch-ua":
-        '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
+      Origin: "https://forms.office.com",
+      Referer: `https://forms.office.com/pages/responsepage.aspx?id=${formId}&route=shorturl`,
+      "sec-ch-ua": '"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
       "sec-ch-ua-mobile": "?0",
       "sec-ch-ua-platform": '"Windows"',
       "Sec-Fetch-Dest": "empty",
       "Sec-Fetch-Mode": "cors",
-      "Sec-Fetch-Site": "cross-site",
+      "Sec-Fetch-Site": "same-origin",
       "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
       "x-correlationid": payload.correlationId,
       "x-ms-form-muid": tokens.muid || "",
       "x-ms-form-request-ring": "business",
