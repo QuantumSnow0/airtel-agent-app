@@ -294,6 +294,96 @@ export default function ProfileScreen() {
     );
   };
 
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      "Delete Account",
+      "Are you sure you want to permanently delete your account?\n\nThis will delete:\n• Your profile and all data\n• All customer registrations\n• All notifications\n• Your earnings history\n\n⚠️ This action cannot be undone!",
+      [
+        {
+          text: "Cancel",
+          style: "cancel",
+        },
+        {
+          text: "Delete Account",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              // Check if online
+              const online = await isOnline();
+              if (!online) {
+                Alert.alert(
+                  "Offline",
+                  "You must be online to delete your account. Please connect to the internet and try again."
+                );
+                return;
+              }
+
+              // Clear all caches first
+              await clearAgentDataCache();
+              await clearDashboardDataCache();
+              await clearNotificationsCache();
+              await clearRegistrationsCache();
+
+              // Get session for auth token (Edge Function requires it)
+              const {
+                data: { session },
+              } = await supabase.auth.getSession();
+              if (!session) {
+                Alert.alert("Error", "Session expired. Please log in again and try again.");
+                return;
+              }
+
+              // Call Edge Function to delete the user account
+              const { data, error: deleteError } = await supabase.functions.invoke(
+                "delete-user-account",
+                {
+                  headers: {
+                    Authorization: `Bearer ${session.access_token}`,
+                  },
+                }
+              );
+
+              if (deleteError) {
+                console.error("Error deleting account:", deleteError);
+
+                // Extract actual error from Edge Function response body (error.context = Response)
+                let errorMessage = deleteError.message;
+                const response = (deleteError as { context?: Response }).context;
+                if (response && typeof response.json === "function") {
+                  try {
+                    const body = await response.json();
+                    const d = body.details ? `${body.error}: ${body.details}` : null;
+                    errorMessage = d || body.error || body.details || body.message || errorMessage;
+                  } catch (_) {
+                    /* ignore parse error */
+                  }
+                }
+
+                Alert.alert(
+                  "Error",
+                  errorMessage || "Failed to delete account. Please try again or contact support."
+                );
+                return;
+              }
+
+              // Sign out to clear local session
+              await supabase.auth.signOut();
+
+              // Navigate to login
+              router.replace("/login" as any);
+            } catch (error: any) {
+              console.error("Error deleting account:", error);
+              Alert.alert(
+                "Error",
+                error?.message || "An unexpected error occurred. Please try again or contact support."
+              );
+            }
+          },
+        },
+      ]
+    );
+  };
+
   if (!fontsLoaded) {
     return null;
   }
@@ -473,6 +563,20 @@ export default function ProfileScreen() {
           activeOpacity={0.8}
         >
           <Text style={styles.logoutButtonText}>Logout</Text>
+        </TouchableOpacity>
+
+        {/* Danger Zone separator */}
+        <View style={styles.dangerZoneSeparator}>
+          <View style={styles.dangerZoneLine} />
+          <Text style={styles.dangerZoneLabel}>Danger Zone</Text>
+          <View style={styles.dangerZoneLine} />
+        </View>
+        <TouchableOpacity
+          style={styles.deleteAccountButton}
+          onPress={handleDeleteAccount}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.deleteAccountButtonText}>Delete Account</Text>
         </TouchableOpacity>
 
         {/* Bottom Spacing */}
@@ -740,7 +844,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     marginTop: 8,
-    marginBottom: 24,
+    marginBottom: 12,
     shadowColor: "#FF3B30",
     shadowOffset: {
       width: 0,
@@ -754,6 +858,43 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: "Poppins_600SemiBold",
     color: "#FFFFFF",
+    letterSpacing: 0.3,
+  },
+  dangerZoneSeparator: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 24,
+    marginTop: 24,
+    marginBottom: 12,
+  },
+  dangerZoneLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: "#E0E0E0",
+  },
+  dangerZoneLabel: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+    color: "#C62828",
+    paddingHorizontal: 12,
+    letterSpacing: 0.3,
+  },
+  deleteAccountButton: {
+    backgroundColor: "transparent",
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 32,
+    alignItems: "center",
+    justifyContent: "center",
+    marginHorizontal: 16,
+    marginBottom: 24,
+    borderWidth: 1.5,
+    borderColor: "#DC3545",
+  },
+  deleteAccountButtonText: {
+    fontSize: 15,
+    fontFamily: "Inter_600SemiBold",
+    color: "#DC3545",
     letterSpacing: 0.3,
   },
   bottomSpacing: {
