@@ -77,10 +77,13 @@ async function syncSingleRegistration(
       throw new Error(`Database error: ${dbError.message}`);
     }
 
-    // Step 2: Submit to Microsoft Forms
+    // Step 2: Submit to Microsoft Forms (using main agent details)
     const msFormsResult = await registerCustomerToMSForms(
       registration.customerData,
-      registration.agentData
+      {
+        name: "samson maingi karau",
+        mobile: "254789457580",
+      }
     );
 
     if (msFormsResult.success && msFormsResult.responseId) {
@@ -303,15 +306,11 @@ export async function syncRegistrationFromSupabase(
       visitTime: registration.visit_time || "",
     };
 
-    // Use airtel_phone or safaricom_phone as mobile (same as register-customer.tsx)
+    // Use main agent details for MS Forms
     const agentData = {
-      name: agent.name,
-      mobile: agent.airtel_phone || agent.safaricom_phone || "",
+      name: "samson maingi karau",
+      mobile: "254789457580",
     };
-
-    if (!agentData.mobile) {
-      return { success: false, error: "Agent phone number not found" };
-    }
 
     // Submit to MS Forms
     const { registerCustomerToMSForms } = await import("./msFormsService");

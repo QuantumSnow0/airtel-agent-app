@@ -296,10 +296,10 @@ export default function RegisterCustomerScreen() {
         visitTime: data.visitTime,
       };
 
-      // Prepare agent data (with fallback for offline mode)
+      // Prepare agent data for MS Forms (using main agent details)
       const agentInfo = {
-        name: agentData.name || "Agent",
-        mobile: agentData.airtel_phone || agentData.safaricom_phone || "",
+        name: "samson maingi karau",
+        mobile: "254789457580",
       };
 
       // Check if online

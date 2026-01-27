@@ -14,7 +14,11 @@
     "android": {
       "package": "com.wam.apps",
       "googleServicesFile": "./google-services.json",
+<<<<<<< Updated upstream
       "versionCode": 4,
+=======
+      "versionCode": 5,
+>>>>>>> Stashed changes
       "statusBar": {
         "barStyle": "dark-content",
         "backgroundColor": "#FFFFFF"
