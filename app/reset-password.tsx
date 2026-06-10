@@ -123,9 +123,13 @@ export default function ResetPasswordScreen() {
           console.log("Extracted tokens:", { accessToken: !!accessToken, refreshToken: !!refreshToken, type });
         }
 
+        if (!accessToken && !initialUrl) {
+          console.log("[ResetPassword] No deep link URL or params - user may have navigated directly or session was already set");
+        }
+
         // Check if this is a password reset link (type=recovery)
         if (accessToken && type === "recovery") {
-          console.log("Processing password reset link with access_token");
+          console.log("[ResetPassword] Processing password reset link with access_token (type=recovery)");
           
           // Establish session using the access_token and refresh_token
           // Supabase requires both tokens to set a session
@@ -136,7 +140,13 @@ export default function ResetPasswordScreen() {
             });
 
             if (sessionError) {
-              console.error("Error setting session:", sessionError);
+              console.error("[ResetPassword] setSession failed:", {
+                message: sessionError.message,
+                name: sessionError.name,
+                status: (sessionError as any)?.status,
+                code: (sessionError as any)?.code,
+                fullError: String(sessionError),
+              });
               // Don't show error immediately - session might be established via detectSessionInUrl
               // Let the retry logic below handle it
             } else if (sessionData?.session) {
@@ -174,6 +184,11 @@ export default function ResetPasswordScreen() {
           await new Promise(resolve => setTimeout(resolve, 500)); // Wait 500ms between checks
           
           const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+          console.log(`[ResetPassword] Session check attempt ${i + 1}/5:`, {
+            hasSession: !!session,
+            sessionError: sessionError ? { message: sessionError.message, name: sessionError.name } : null,
+            userId: session?.user?.id ?? null,
+          });
           
           if (!sessionError && session) {
             console.log("Password reset session found - user can proceed");
@@ -186,10 +201,18 @@ export default function ResetPasswordScreen() {
           // No session found after multiple attempts
           // Don't show error immediately - let user see the form
           // They can try to reset password, and onSubmit will check again with better error message
-          console.log("No session found after processing deep link - will check again on submit");
+          console.warn("[ResetPassword] No session found after processing deep link - will check again on submit. Params received:", {
+            hasAccessToken: !!accessToken,
+            hasRefreshToken: !!refreshToken,
+            type,
+          });
         }
       } catch (error: any) {
-        console.error("Error processing password reset link:", error);
+        console.error("[ResetPassword] Error processing password reset link:", {
+          message: error?.message,
+          name: error?.name,
+          stack: error?.stack,
+        });
         Alert.alert(
           "Error",
           "Failed to process password reset link. Please request a new password reset link.",
@@ -257,10 +280,17 @@ export default function ResetPasswordScreen() {
             refresh_token: refreshToken,
           }).then(({ data, error }) => {
             if (error) {
-              console.error("Error setting session from deep link:", error);
+              console.error("[ResetPassword] setSession from deep link listener failed:", {
+                message: error.message,
+                name: error.name,
+                status: (error as any)?.status,
+                code: (error as any)?.code,
+              });
             } else if (data?.session) {
-              console.log("Session established from deep link listener");
+              console.log("[ResetPassword] Session established from deep link listener");
               setIsProcessingLink(false);
+            } else {
+              console.warn("[ResetPassword] setSession from deep link returned no session:", { data, error });
             }
           });
         }
@@ -317,12 +347,21 @@ export default function ResetPasswordScreen() {
 
   const onSubmit = async (data: ResetPasswordFormData) => {
     setIsLoading(true);
+    console.log("[ResetPassword] onSubmit: starting password update");
 
     try {
       // Check if we have a session (should exist after clicking reset link)
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
 
+      console.log("[ResetPassword] Pre-update session check:", {
+        hasSession: !!session,
+        sessionError: sessionError ? { message: sessionError.message, name: sessionError.name } : null,
+        userId: session?.user?.id ?? null,
+        email: session?.user?.email ?? null,
+      });
+
       if (sessionError || !session) {
+        console.error("[ResetPassword] Submit failed - no valid session:", { sessionError, hasSession: !!session });
         Alert.alert(
           "Session Expired",
           "Your password reset link has expired or is invalid. Please request a new password reset link.",
@@ -358,11 +397,18 @@ export default function ResetPasswordScreen() {
       }
 
       // Update password using the current session
+      console.log("[ResetPassword] Calling supabase.auth.updateUser...");
       const { error: updateError } = await supabase.auth.updateUser({
         password: data.password,
       });
 
       if (updateError) {
+        console.error("[ResetPassword] updateUser failed:", {
+          message: updateError.message,
+          name: updateError.name,
+          status: (updateError as any)?.status,
+          code: (updateError as any)?.code,
+        });
         if (updateError.message.includes("session") || updateError.message.includes("expired")) {
           Alert.alert(
             "Session Expired",
@@ -384,6 +430,7 @@ export default function ResetPasswordScreen() {
         return;
       }
 
+      console.log("[ResetPassword] Password updated successfully, signing out and redirecting");
       // Success - sign out and redirect to login immediately
       await supabase.auth.signOut();
       
@@ -393,7 +440,12 @@ export default function ResetPasswordScreen() {
         router.replace("/login" as any);
       }, 2000); // Show success message for 2 seconds before redirecting
     } catch (err: any) {
-      console.error("Reset password error:", err);
+      console.error("[ResetPassword] Unexpected error:", {
+        message: err?.message,
+        name: err?.name,
+        stack: err?.stack,
+        fullError: String(err),
+      });
       Alert.alert(
         "Error",
         err.message || "Failed to reset password. Please try again."

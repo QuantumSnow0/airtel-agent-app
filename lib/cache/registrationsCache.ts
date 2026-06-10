@@ -13,6 +13,8 @@ export interface CachedRegistration {
   ms_forms_response_id?: string;
   ms_forms_submitted_at?: string;
   syncStatus?: "synced" | "pending" | "not_synced";
+  /** When omitted, treat as Airtel (`customer_registrations`). */
+  source?: "airtel" | "safaricom";
 }
 
 export interface CachedRegistrationsData {

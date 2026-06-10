@@ -8,8 +8,9 @@ import {
     Poppins_700Bold,
 } from "@expo-google-fonts/poppins";
 import { useFonts } from "expo-font";
+import { useFocusEffect } from "@react-navigation/native";
 import { useRouter, useSegments } from "expo-router";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
@@ -22,30 +23,75 @@ import {
     View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Toast } from "../components/Toast";
+import { MaterialIcons } from "@expo/vector-icons";
+import { AgentAvatar } from "../../components/AgentAvatar";
+import { CommissionDonutCard } from "../../components/CommissionDonutCard";
+import { getWamTabBarOffset } from "../../components/WamTabBar";
+import { CarrierSelectModal } from "../../components/CarrierSelectModal";
+import { AppRatingPrompt } from "../../components/AppRatingPrompt";
+import { NotificationEnablePrompt } from "../../components/NotificationEnablePrompt";
+import { Toast } from "../../components/Toast";
+import {
+  dismissAppRatingPrompt,
+  markAppRatingSubmitted,
+  shouldShowAppRatingPrompt,
+} from "../../lib/appRatingPromptStorage";
+import {
+  markAppRatingPlayStoreOpened,
+  submitAppRating,
+} from "../../lib/services/appRatingService";
+import {
+  dismissNotificationPrompt,
+  shouldShowNotificationPrompt,
+} from "../../lib/notificationPromptStorage";
+import { getNotificationPermissionState } from "../../lib/services/pushNotificationService";
+import {
+  getAgentAvatarSeed,
+  getDiceBearStyleForName,
+} from "../../lib/utils/dicebear";
 import {
     CachedAgentData,
     clearAgentDataCache,
     getCachedAgentData,
     saveAgentDataToCache,
-} from "../lib/cache/agentCache";
+} from "../../lib/cache/agentCache";
 import {
     clearDashboardDataCache,
     getCachedDashboardData,
     saveDashboardDataToCache,
-} from "../lib/cache/dashboardCache";
-import { clearNotificationsCache } from "../lib/cache/notificationsCache";
-import { clearRegistrationsCache } from "../lib/cache/registrationsCache";
-import { getPendingRegistrations, initOfflineStorage } from "../lib/services/offlineStorage";
-import { isOnline, setupAutoSync } from "../lib/services/syncService";
-import { supabase } from "../lib/supabase";
+} from "../../lib/cache/dashboardCache";
+import { clearNotificationsCache } from "../../lib/cache/notificationsCache";
+import { clearRegistrationsCache } from "../../lib/cache/registrationsCache";
+import {
+  getSafaricomCommissionKesForRegistration,
+  getSafaricomDealPriceKes,
+} from "../../lib/commissions/safaricomAgentCommission";
+import {
+  computeAirtelInstalledCommissionKsh,
+  computeCombinedWalletCommissionKsh,
+} from "../../lib/commissions/walletCommission";
+import {
+  fetchCommissionRates,
+  getCachedCommissionRates,
+  type AirtelCommissionRates,
+} from "../../lib/services/commissionRatesService";
+import {
+  mapCustomerRowToUnifiedList,
+  mapSafaricomRowToUnifiedList,
+} from "../../lib/registrations/unifiedListRegistration";
+import { getPendingRegistrations, initOfflineStorage } from "../../lib/services/offlineStorage";
+import { isOnline, setupAutoSync } from "../../lib/services/syncService";
+import { supabase } from "../../lib/supabase";
 import {
     getCardPadding,
-    getResponsivePadding,
     scaleFont,
     scaleHeight,
     scaleWidth
-} from "../lib/utils/responsive";
+} from "../../lib/utils/responsive";
+import {
+  REGISTRATION_STATUS_COLORS,
+  formatRegistrationStatusLabel,
+} from "../../constants/registrationStatuses";
 
 // Helper function to get time-based greeting
 const getTimeBasedGreeting = (): string => {
@@ -113,17 +159,101 @@ export default function DashboardScreen() {
   const [standardRegistered, setStandardRegistered] = useState(0);
   const [premiumInstalled, setPremiumInstalled] = useState(0);
   const [standardInstalled, setStandardInstalled] = useState(0);
+  const [safaricomRegistered, setSafaricomRegistered] = useState(0);
+  const [safaricomInstalled, setSafaricomInstalled] = useState(0);
+  const [safaricomInstalledCommissionKsh, setSafaricomInstalledCommissionKsh] =
+    useState(0);
+  const [safaricomFiberRegistered, setSafaricomFiberRegistered] = useState(0);
+  const [safaricomFiberInstalled, setSafaricomFiberInstalled] = useState(0);
+  const [safaricomFiberCommissionKsh, setSafaricomFiberCommissionKsh] = useState(0);
+  const [safaricomPortableRegistered, setSafaricomPortableRegistered] = useState(0);
+  const [safaricomPortableInstalled, setSafaricomPortableInstalled] = useState(0);
+  const [safaricomPortableCommissionKsh, setSafaricomPortableCommissionKsh] = useState(0);
+  const [safaricomDedicatedRegistered, setSafaricomDedicatedRegistered] = useState(0);
+  const [safaricomDedicatedInstalled, setSafaricomDedicatedInstalled] = useState(0);
+  const [safaricomDedicatedCommissionKsh, setSafaricomDedicatedCommissionKsh] = useState(0);
+  const [safaricomFiberAvgPackageKsh, setSafaricomFiberAvgPackageKsh] = useState(0);
+  const [safaricomPortableAvgPackageKsh, setSafaricomPortableAvgPackageKsh] = useState(0);
+  const [safaricomDedicatedAvgPackageKsh, setSafaricomDedicatedAvgPackageKsh] = useState(0);
+  const [safaricomTotalAvgPackageKsh, setSafaricomTotalAvgPackageKsh] = useState(0);
+  const [paidFromLedgerKsh, setPaidFromLedgerKsh] = useState(0);
+  const [airtelCommissionRates, setAirtelCommissionRates] =
+    useState<AirtelCommissionRates>(getCachedCommissionRates);
   const [recentRegistrations, setRecentRegistrations] = useState<any[]>([]);
   const [isLoadingRegistrations, setIsLoadingRegistrations] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [pendingSyncRegistrations, setPendingSyncRegistrations] = useState<Set<string>>(new Set());
   const spinValue = useRef(new Animated.Value(0)).current;
-  const notificationPulseAnim = useRef(new Animated.Value(1)).current;
   const [toastVisible, setToastVisible] = useState(false);
   const [toastMessage, setToastMessage] = useState("");
   const [toastType, setToastType] = useState<"info" | "success" | "error">("info");
+  const [carrierSelectVisible, setCarrierSelectVisible] = useState(false);
+  const [notificationPromptVisible, setNotificationPromptVisible] = useState(false);
+  const [ratingPromptVisible, setRatingPromptVisible] = useState(false);
   const [isOffline, setIsOffline] = useState(false);
   const wasOfflineRef = useRef(false);
+
+  const evaluateDashboardPrompts = async (agentStatus?: string | null) => {
+    if (agentStatus !== "approved") {
+      setNotificationPromptVisible(false);
+      setRatingPromptVisible(false);
+      return;
+    }
+
+    const permission = await getNotificationPermissionState();
+    const showNotification =
+      permission !== "granted" && (await shouldShowNotificationPrompt());
+    setNotificationPromptVisible(showNotification);
+
+    if (showNotification) {
+      setRatingPromptVisible(false);
+      return;
+    }
+
+    const showRating = await shouldShowAppRatingPrompt();
+    setRatingPromptVisible(showRating);
+  };
+
+  const handleNotificationPromptDismiss = async () => {
+    await dismissNotificationPrompt();
+    setNotificationPromptVisible(false);
+    void evaluateDashboardPrompts(agentData?.status);
+  };
+
+  const handleNotificationEnabled = () => {
+    setNotificationPromptVisible(false);
+    void evaluateDashboardPrompts(agentData?.status);
+  };
+
+  const handleRatingPromptDismiss = async () => {
+    await dismissAppRatingPrompt();
+    setRatingPromptVisible(false);
+  };
+
+  const handleRatingSubmitted = async (score: number) => {
+    await markAppRatingSubmitted(score);
+    if (user?.id) {
+      await submitAppRating(user.id, score);
+    }
+  };
+
+  const handlePlayStoreOpened = async () => {
+    if (user?.id) {
+      await markAppRatingPlayStoreOpened(user.id);
+    }
+  };
+
+  const handleRatingComplete = () => {
+    setRatingPromptVisible(false);
+  };
+
+  useFocusEffect(
+    useCallback(() => {
+      if (agentData?.status === "approved") {
+        void evaluateDashboardPrompts(agentData.status);
+      }
+    }, [agentData?.status])
+  );
 
   const [fontsLoaded] = useFonts({
     Poppins_600SemiBold,
@@ -145,7 +275,7 @@ export default function DashboardScreen() {
         await loadUnreadNotificationCount(user.id);
         
         // Register device token for push notifications
-        const { requestNotificationPermissions, getDeviceToken, registerDeviceToken } = await import("../lib/services/pushNotificationService");
+        const { requestNotificationPermissions, getDeviceToken, registerDeviceToken } = await import("../../lib/services/pushNotificationService");
         const hasPermission = await requestNotificationPermissions();
         if (hasPermission) {
           const token = await getDeviceToken();
@@ -239,11 +369,8 @@ export default function DashboardScreen() {
           setAgentData(updatedAgent);
           saveAgentDataToCache(updatedAgent);
           
-          // Update balance if it changed
-          if (updatedAgent.available_balance !== undefined && updatedAgent.available_balance !== null) {
-            setBalance(updatedAgent.available_balance);
-            console.log("💰 Balance updated:", updatedAgent.available_balance);
-          }
+          // Recalculate wallet (DB balance may omit Safaricom until triggers include it)
+          void loadCustomerData(user.id);
           
           // Log status change if it occurred
           if (payload.old && payload.old.status !== updatedAgent.status) {
@@ -282,6 +409,19 @@ export default function DashboardScreen() {
           console.log("🟢 Real-time registration update received:", payload.eventType, payload);
           
           // Reload customer data to get updated statuses and counts
+          await loadCustomerData(user.id);
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "safaricom_registrations",
+          filter: `agent_id=eq.${user.id}`,
+        },
+        async (payload) => {
+          console.log("🟢 Real-time Safaricom registration update:", payload.eventType, payload);
           await loadCustomerData(user.id);
         }
       )
@@ -369,32 +509,6 @@ export default function DashboardScreen() {
     }
   }, [agentData?.status]);
 
-  // Animate notification bell when there are unread notifications
-  useEffect(() => {
-    if (unreadNotifications > 0) {
-      // Start pulsing animation
-      const pulseAnimation = Animated.loop(
-        Animated.sequence([
-          Animated.timing(notificationPulseAnim, {
-            toValue: 1.15,
-            duration: 800,
-            useNativeDriver: true,
-          }),
-          Animated.timing(notificationPulseAnim, {
-            toValue: 1,
-            duration: 800,
-            useNativeDriver: true,
-          }),
-        ])
-      );
-      pulseAnimation.start();
-      return () => pulseAnimation.stop();
-    } else {
-      // Reset animation when no unread notifications
-      notificationPulseAnim.setValue(1);
-    }
-  }, [unreadNotifications]);
-
   // Check network status periodically
   useEffect(() => {
     if (!user?.id) return;
@@ -446,6 +560,7 @@ export default function DashboardScreen() {
 
   const loadUserData = async () => {
     setIsLoading(true);
+    let agentStatusForPrompt: string | null = null;
     try {
       // Check if online (with timeout to prevent hanging)
       // Use Promise.race to ensure it doesn't hang when offline
@@ -556,6 +671,11 @@ export default function DashboardScreen() {
 
       setUser(currentUser);
 
+      if (!currentUser) {
+        setIsLoading(false);
+        return;
+      }
+
       // If offline, load from cache
       if (!online) {
         console.log("📴 Offline - loading from cache");
@@ -569,6 +689,11 @@ export default function DashboardScreen() {
           setStandardRegistered(cachedDashboardData.standardRegistered ?? 0);
           setPremiumInstalled(cachedDashboardData.premiumInstalled ?? 0);
           setStandardInstalled(cachedDashboardData.standardInstalled ?? 0);
+          setSafaricomRegistered(cachedDashboardData.safaricomRegistered ?? 0);
+          setSafaricomInstalled(cachedDashboardData.safaricomInstalled ?? 0);
+          setSafaricomInstalledCommissionKsh(
+            cachedDashboardData.safaricomInstalledCommissionKsh ?? 0
+          );
           setRecentRegistrations(cachedDashboardData.recentRegistrations);
           setIsLoading(false);
           return;
@@ -595,6 +720,11 @@ export default function DashboardScreen() {
         setStandardRegistered(cachedDashboardData.standardRegistered ?? 0);
         setPremiumInstalled(cachedDashboardData.premiumInstalled ?? 0);
         setStandardInstalled(cachedDashboardData.standardInstalled ?? 0);
+        setSafaricomRegistered(cachedDashboardData.safaricomRegistered ?? 0);
+        setSafaricomInstalled(cachedDashboardData.safaricomInstalled ?? 0);
+        setSafaricomInstalledCommissionKsh(
+          cachedDashboardData.safaricomInstalledCommissionKsh ?? 0
+        );
         setRecentRegistrations(cachedDashboardData.recentRegistrations);
         setIsLoading(false); // Show cached data immediately
       }
@@ -618,11 +748,13 @@ export default function DashboardScreen() {
         // Save fresh data to cache
         await saveAgentDataToCache(agent);
         setAgentData(agent);
-        
-        // Set balance and total earnings from database
-        // These are automatically updated by the database trigger
-        setBalance(agent.available_balance || 0);
-        // Note: total_earnings is used in the UI calculation below
+        agentStatusForPrompt = agent.status;
+        // Wallet KSh is set in loadCustomerData (Airtel + Safaricom installed commissions)
+      }
+
+      if (online) {
+        const rates = await fetchCommissionRates();
+        setAirtelCommissionRates(rates);
       }
 
       // Load customer registrations data and notification count
@@ -647,6 +779,7 @@ export default function DashboardScreen() {
       const cachedDashboardData = await getCachedDashboardData();
       if (cachedDashboardData) {
         setAgentData(cachedDashboardData.agentData);
+        agentStatusForPrompt = cachedDashboardData.agentData?.status ?? null;
         setBalance(cachedDashboardData.balance);
         setTotalRegistered(cachedDashboardData.totalRegistered);
         setTotalInstalled(cachedDashboardData.totalInstalled);
@@ -654,6 +787,11 @@ export default function DashboardScreen() {
         setStandardRegistered(cachedDashboardData.standardRegistered ?? 0);
         setPremiumInstalled(cachedDashboardData.premiumInstalled ?? 0);
         setStandardInstalled(cachedDashboardData.standardInstalled ?? 0);
+        setSafaricomRegistered(cachedDashboardData.safaricomRegistered ?? 0);
+        setSafaricomInstalled(cachedDashboardData.safaricomInstalled ?? 0);
+        setSafaricomInstalledCommissionKsh(
+          cachedDashboardData.safaricomInstalledCommissionKsh ?? 0
+        );
         setRecentRegistrations(cachedDashboardData.recentRegistrations);
       } else {
         const cachedAgentData = await getCachedAgentData();
@@ -663,6 +801,9 @@ export default function DashboardScreen() {
       }
     } finally {
       setIsLoading(false);
+      if (agentStatusForPrompt) {
+        void evaluateDashboardPrompts(agentStatusForPrompt);
+      }
     }
   };
 
@@ -704,16 +845,37 @@ export default function DashboardScreen() {
         ms_forms_response_id: undefined,
         ms_forms_submitted_at: undefined,
         syncStatus: "pending" as const,
+        source: "airtel" as const,
       }));
 
-      // Fetch customer registrations (include MS Forms submission status)
-      // Increase limit to 15 to account for pending registrations that might be filtered out
-      const { data: registrations, error: regError } = await supabase
-        .from("customer_registrations")
-        .select("id, customer_name, status, created_at, ms_forms_response_id, ms_forms_submitted_at")
-        .eq("agent_id", agentId)
-        .order("created_at", { ascending: false })
-        .limit(15);
+      // Airtel + Safaricom recent rows (merged by date)
+      const [customerRes, safaricomRes] = await Promise.all([
+        supabase
+          .from("customer_registrations")
+          .select(
+            "id, customer_name, status, created_at, ms_forms_response_id, ms_forms_submitted_at"
+          )
+          .eq("agent_id", agentId)
+          .order("created_at", { ascending: false })
+          .limit(15),
+        supabase
+          .from("safaricom_registrations")
+          .select(
+            "id, customer_name, service_package, status, created_at, fiber_region_name, fiber_cluster_name, install_town, install_county"
+          )
+          .eq("agent_id", agentId)
+          .order("created_at", { ascending: false })
+          .limit(15),
+      ]);
+
+      const { data: registrations, error: regError } = customerRes;
+      const safRows = safaricomRes.error ? [] : safaricomRes.data ?? [];
+      if (safaricomRes.error) {
+        const msg = String(safaricomRes.error.message || "").toLowerCase();
+        if (!msg.includes("does not exist")) {
+          console.warn("Safaricom registrations list:", safaricomRes.error);
+        }
+      }
 
       if (regError) {
         console.error("Error loading registrations:", regError);
@@ -751,19 +913,22 @@ export default function DashboardScreen() {
           }
         }
         
-        return {
+        return mapCustomerRowToUnifiedList({
           ...reg,
           syncStatus,
-        };
+        });
       });
 
-      // Merge pending offline registrations with Supabase registrations
-      // Exclude any that are already in the database (by ID)
+      const safUnified = (safRows ?? []).map((row: any) =>
+        mapSafaricomRowToUnifiedList(row)
+      );
+
+      // Merge pending offline Airtel + Supabase Airtel + Safaricom
       const allRegistrationsCombined = [
         ...pendingRegistrations,
         ...enhancedRegistrations.filter((reg) => !pendingIds.has(reg.id)),
+        ...safUnified,
       ].sort((a, b) => {
-        // Sort by created_at descending (most recent first)
         const dateA = new Date(a.created_at).getTime();
         const dateB = new Date(b.created_at).getTime();
         return dateB - dateA;
@@ -840,19 +1005,235 @@ export default function DashboardScreen() {
         setStandardInstalled(standardInstalledCount);
       }
 
+      // Safaricom registrations (commission = share of package price per installed sale)
+      let safRegN = 0;
+      let safInstN = 0;
+      let safCommKsh = 0;
+      let safFiberRegN = 0;
+      let safFiberInstN = 0;
+      let safFiberCommKsh = 0;
+      let safPortableRegN = 0;
+      let safPortableInstN = 0;
+      let safPortableCommKsh = 0;
+      let safDedicatedRegN = 0;
+      let safDedicatedInstN = 0;
+      let safDedicatedCommKsh = 0;
+      let safFiberPriceTotalKsh = 0;
+      let safPortablePriceTotalKsh = 0;
+      let safDedicatedPriceTotalKsh = 0;
+      const { count: safRegCount, error: safRegErr } = await supabase
+        .from("safaricom_registrations")
+        .select("*", { count: "exact", head: true })
+        .eq("agent_id", agentId);
+      if (!safRegErr && safRegCount !== null) {
+        safRegN = safRegCount;
+      } else if (
+        safRegErr &&
+        String(safRegErr.message || "")
+          .toLowerCase()
+          .includes("does not exist")
+      ) {
+        console.warn("safaricom_registrations table not found; skip Safaricom stats");
+      }
+
+      const { count: safInstCount, error: safInstErr } = await supabase
+        .from("safaricom_registrations")
+        .select("*", { count: "exact", head: true })
+        .eq("agent_id", agentId)
+        .eq("status", "installed");
+      if (!safInstErr && safInstCount !== null) {
+        safInstN = safInstCount;
+      }
+
+      const { data: safInstalledRows, error: safRowsErr } = await supabase
+        .from("safaricom_registrations")
+        .select(
+          "service_package, fiber_deal_id, portable_deal_id, dedicated_wifi_deal_id"
+        )
+        .eq("agent_id", agentId)
+        .eq("status", "installed");
+      if (!safRowsErr && safInstalledRows?.length) {
+        safCommKsh = safInstalledRows.reduce(
+          (sum, row) =>
+            sum +
+            getSafaricomCommissionKesForRegistration(
+              row as {
+                service_package: string;
+                fiber_deal_id?: string | null;
+                portable_deal_id?: string | null;
+                dedicated_wifi_deal_id?: string | null;
+              }
+            ),
+          0
+        );
+      }
+
+      const [
+        safFiberRegRes,
+        safFiberInstRes,
+        safPortableRegRes,
+        safPortableInstRes,
+        safDedicatedRegRes,
+        safDedicatedInstRes,
+      ] = await Promise.all([
+        supabase
+          .from("safaricom_registrations")
+          .select("*", { count: "exact", head: true })
+          .eq("agent_id", agentId)
+          .eq("service_package", "home_business_fiber"),
+        supabase
+          .from("safaricom_registrations")
+          .select("*", { count: "exact", head: true })
+          .eq("agent_id", agentId)
+          .eq("service_package", "home_business_fiber")
+          .eq("status", "installed"),
+        supabase
+          .from("safaricom_registrations")
+          .select("*", { count: "exact", head: true })
+          .eq("agent_id", agentId)
+          .eq("service_package", "safaricom_portable_5g"),
+        supabase
+          .from("safaricom_registrations")
+          .select("*", { count: "exact", head: true })
+          .eq("agent_id", agentId)
+          .eq("service_package", "safaricom_portable_5g")
+          .eq("status", "installed"),
+        supabase
+          .from("safaricom_registrations")
+          .select("*", { count: "exact", head: true })
+          .eq("agent_id", agentId)
+          .eq("service_package", "safaricom_dedicated_wifi"),
+        supabase
+          .from("safaricom_registrations")
+          .select("*", { count: "exact", head: true })
+          .eq("agent_id", agentId)
+          .eq("service_package", "safaricom_dedicated_wifi")
+          .eq("status", "installed"),
+      ]);
+
+      safFiberRegN = safFiberRegRes.count ?? 0;
+      safFiberInstN = safFiberInstRes.count ?? 0;
+      safPortableRegN = safPortableRegRes.count ?? 0;
+      safPortableInstN = safPortableInstRes.count ?? 0;
+      safDedicatedRegN = safDedicatedRegRes.count ?? 0;
+      safDedicatedInstN = safDedicatedInstRes.count ?? 0;
+
+      if (safInstalledRows?.length) {
+        for (const row of safInstalledRows) {
+          const reg = row as {
+            service_package: string;
+            fiber_deal_id?: string | null;
+            portable_deal_id?: string | null;
+            dedicated_wifi_deal_id?: string | null;
+          };
+          const comm = getSafaricomCommissionKesForRegistration(reg);
+          let packagePriceKsh = 0;
+          if (reg.service_package === "home_business_fiber") {
+            packagePriceKsh = getSafaricomDealPriceKes(reg.fiber_deal_id);
+            safFiberCommKsh += comm;
+            safFiberPriceTotalKsh += packagePriceKsh;
+          } else if (reg.service_package === "safaricom_portable_5g") {
+            packagePriceKsh = getSafaricomDealPriceKes(reg.portable_deal_id);
+            safPortableCommKsh += comm;
+            safPortablePriceTotalKsh += packagePriceKsh;
+          } else if (reg.service_package === "safaricom_dedicated_wifi") {
+            packagePriceKsh = getSafaricomDealPriceKes(reg.dedicated_wifi_deal_id);
+            safDedicatedCommKsh += comm;
+            safDedicatedPriceTotalKsh += packagePriceKsh;
+          }
+        }
+      }
+
+      setSafaricomRegistered(safRegN);
+      setSafaricomInstalled(safInstN);
+      setSafaricomInstalledCommissionKsh(safCommKsh);
+      setSafaricomFiberRegistered(safFiberRegN);
+      setSafaricomFiberInstalled(safFiberInstN);
+      setSafaricomFiberCommissionKsh(safFiberCommKsh);
+      setSafaricomPortableRegistered(safPortableRegN);
+      setSafaricomPortableInstalled(safPortableInstN);
+      setSafaricomPortableCommissionKsh(safPortableCommKsh);
+      setSafaricomDedicatedRegistered(safDedicatedRegN);
+      setSafaricomDedicatedInstalled(safDedicatedInstN);
+      setSafaricomDedicatedCommissionKsh(safDedicatedCommKsh);
+      setSafaricomFiberAvgPackageKsh(
+        safFiberInstN > 0 ? Math.round(safFiberPriceTotalKsh / safFiberInstN) : 0
+      );
+      setSafaricomPortableAvgPackageKsh(
+        safPortableInstN > 0 ? Math.round(safPortablePriceTotalKsh / safPortableInstN) : 0
+      );
+      setSafaricomDedicatedAvgPackageKsh(
+        safDedicatedInstN > 0 ? Math.round(safDedicatedPriceTotalKsh / safDedicatedInstN) : 0
+      );
+      const safTotalInstalledN = safFiberInstN + safPortableInstN + safDedicatedInstN;
+      const safTotalPriceKsh = safFiberPriceTotalKsh + safPortablePriceTotalKsh + safDedicatedPriceTotalKsh;
+      setSafaricomTotalAvgPackageKsh(
+        safTotalInstalledN > 0 ? Math.round(safTotalPriceKsh / safTotalInstalledN) : 0
+      );
+
+      const premiumInstN =
+        !premiumInstError && premiumInstalledCount != null ? premiumInstalledCount : 0;
+      const standardInstN =
+        !standardInstError && standardInstalledCount != null ? standardInstalledCount : 0;
+      const rates = await fetchCommissionRates();
+      setAirtelCommissionRates(rates);
+      const walletTotalKsh = computeCombinedWalletCommissionKsh(
+        premiumInstN,
+        standardInstN,
+        safCommKsh,
+        rates
+      );
+      setBalance(walletTotalKsh);
+
+      // "Paid to you" should come from recorded payout ledger, not inferred balance math.
+      let paidLedgerKsh = 0;
+      const { data: paymentRows, error: paymentsErr } = await supabase
+        .from("agent_payments")
+        .select("amount_ksh")
+        .eq("agent_id", agentId);
+      if (!paymentsErr && paymentRows?.length) {
+        paidLedgerKsh = paymentRows.reduce(
+          (sum, row) => sum + Number((row as { amount_ksh?: number | string | null }).amount_ksh ?? 0),
+          0
+        );
+      } else if (paymentsErr) {
+        const msg = String(paymentsErr.message || "").toLowerCase();
+        if (!msg.includes("does not exist")) {
+          console.warn("agent_payments lookup:", paymentsErr);
+        }
+      }
+      setPaidFromLedgerKsh(Math.max(0, Math.round(paidLedgerKsh)));
+
       // Save to cache when online
       if (online && agentData) {
         // Use the top10Registrations we just set
         const registrationsForCache = allRegistrationsCombined.slice(0, 10);
         await saveDashboardDataToCache({
           agentData,
-          balance: balance ?? 0,
-          totalRegistered: totalRegistered ?? 0,
-          totalInstalled: totalInstalled ?? 0,
-          premiumRegistered: premiumRegistered ?? 0,
-          standardRegistered: standardRegistered ?? 0,
-          premiumInstalled: premiumInstalled ?? 0,
-          standardInstalled: standardInstalled ?? 0,
+          balance: walletTotalKsh,
+          totalRegistered:
+            !countError && totalRegistered != null ? totalRegistered : 0,
+          totalInstalled:
+            !installedError && totalInstalled != null ? totalInstalled : 0,
+          premiumRegistered:
+            !premiumRegError && premiumRegisteredCount != null
+              ? premiumRegisteredCount
+              : 0,
+          standardRegistered:
+            !standardRegError && standardRegisteredCount != null
+              ? standardRegisteredCount
+              : 0,
+          premiumInstalled:
+            !premiumInstError && premiumInstalledCount != null
+              ? premiumInstalledCount
+              : 0,
+          standardInstalled:
+            !standardInstError && standardInstalledCount != null
+              ? standardInstalledCount
+              : 0,
+          safaricomRegistered: safRegN,
+          safaricomInstalled: safInstN,
+          safaricomInstalledCommissionKsh: safCommKsh,
           recentRegistrations: registrationsForCache,
         });
       }
@@ -864,25 +1245,55 @@ export default function DashboardScreen() {
   };
 
   const handleProfilePress = () => {
-    router.push("/profile" as any);
+    router.navigate("/profile" as any);
   };
+
+  const tabBarClearance = getWamTabBarOffset(insets.bottom);
 
   if (!fontsLoaded) {
     return null;
   }
 
-  if (isLoading) {
-    return (
-      <View style={[styles.container, styles.loadingContainer]}>
-        <ActivityIndicator size="large" color="#0066CC" />
-        <Text style={styles.loadingText}>Loading...</Text>
-      </View>
-    );
-  }
-
   const isApproved = agentData?.status === "approved";
+  const showStatusBanner =
+    !!agentData?.status && agentData.status !== "approved";
   const name = agentData?.name || user?.email || "";
   const initial = getInitial(agentData?.name, user?.email);
+  const avatarSeed = getAgentAvatarSeed(
+    agentData?.name,
+    agentData?.email ?? user?.email,
+    user?.id
+  );
+  const avatarStyle = getDiceBearStyleForName(agentData?.name);
+
+  const airtelStandardCommissionKsh =
+    standardInstalled * airtelCommissionRates.standard;
+  const airtelPremiumCommissionKsh =
+    premiumInstalled * airtelCommissionRates.premium;
+  const airtelInstalledCommissionKsh = computeAirtelInstalledCommissionKsh(
+    premiumInstalled,
+    standardInstalled,
+    airtelCommissionRates
+  );
+  const combinedEstimatedCommissionKsh =
+    airtelInstalledCommissionKsh + safaricomInstalledCommissionKsh;
+  const walletDisplayKsh = combinedEstimatedCommissionKsh;
+  const paidToAgentKsh = Math.max(0, paidFromLedgerKsh);
+
+  const commissionSegments = [
+    {
+      key: "airtel",
+      label: "Airtel",
+      value: airtelInstalledCommissionKsh,
+      color: "#E60012",
+    },
+    {
+      key: "safaricom",
+      label: "Safaricom",
+      value: safaricomInstalledCommissionKsh,
+      color: "#00A651",
+    },
+  ];
 
   // Interpolate rotation for hourglass animation
   const spin = spinValue.interpolate({
@@ -892,6 +1303,26 @@ export default function DashboardScreen() {
 
   return (
     <>
+      <NotificationEnablePrompt
+        visible={notificationPromptVisible}
+        agentId={user?.id}
+        onDismiss={handleNotificationPromptDismiss}
+        onEnabled={handleNotificationEnabled}
+      />
+      <AppRatingPrompt
+        visible={ratingPromptVisible}
+        onDismiss={handleRatingPromptDismiss}
+        onRated={handleRatingSubmitted}
+        onPlayStoreOpened={handlePlayStoreOpened}
+        onComplete={handleRatingComplete}
+      />
+      {isLoading ? (
+        <View style={[styles.container, styles.loadingContainer]}>
+          <ActivityIndicator size="large" color="#0066CC" />
+          <Text style={styles.loadingText}>Loading...</Text>
+        </View>
+      ) : (
+        <>
       {/* Toast Notification */}
       <Toast
         visible={toastVisible}
@@ -900,22 +1331,30 @@ export default function DashboardScreen() {
         duration={toastType === "info" ? 0 : 3000}
         onHide={() => setToastVisible(false)}
       />
+      <CarrierSelectModal
+        visible={carrierSelectVisible}
+        onClose={() => setCarrierSelectVisible(false)}
+        onSelectAirtel={() => {
+          setCarrierSelectVisible(false);
+          router.push("/register-customer" as any);
+        }}
+        onSelectSafaricom={() => {
+          setCarrierSelectVisible(false);
+          router.push("/register-safaricom-customer" as any);
+        }}
+      />
       <View style={styles.container}>
-        {/* Agent Status Banner - Top */}
-        {agentData?.status && (
+        {/* Status banner — only when not active (approved) */}
+        {showStatusBanner && agentData?.status && (
           <View
             style={[
               styles.statusBanner,
               { paddingTop: insets.top + 4 },
-              agentData.status === "approved" && styles.statusBannerApproved,
               agentData.status === "pending" && styles.statusBannerPending,
               agentData.status === "banned" && styles.statusBannerSuspended,
               agentData.status === "rejected" && styles.statusBannerRejected,
             ]}
           >
-            {agentData.status === "approved" && (
-              <Text style={styles.statusBannerIcon}></Text>
-            )}
             {agentData.status === "pending" && (
               <Text style={styles.statusBannerIcon}>⏳</Text>
             )}
@@ -928,13 +1367,11 @@ export default function DashboardScreen() {
             <Text
               style={[
                 styles.statusBannerText,
-                agentData.status === "approved" && styles.statusBannerTextApproved,
                 agentData.status === "pending" && styles.statusBannerTextPending,
                 agentData.status === "banned" && styles.statusBannerTextSuspended,
                 agentData.status === "rejected" && styles.statusBannerTextRejected,
               ]}
             >
-              {agentData.status === "approved" && "Account Active"}
               {agentData.status === "pending" && "Awaiting Approval"}
               {agentData.status === "banned" && "Account Suspended"}
               {agentData.status === "rejected" && "Application Rejected"}
@@ -942,8 +1379,92 @@ export default function DashboardScreen() {
           </View>
         )}
         
+        {/* Top bar — WAM APPS branding + actions */}
+        <View
+          style={[
+            styles.topHeader,
+            !showStatusBanner && {
+              paddingTop: insets.top + scaleHeight(12),
+              borderTopLeftRadius: scaleWidth(20),
+              borderTopRightRadius: scaleWidth(20),
+            },
+            showStatusBanner && {
+              borderTopLeftRadius: 0,
+              borderTopRightRadius: 0,
+            },
+          ]}
+        >
+          <View style={styles.topHeaderRow}>
+            <View style={styles.brandRow}>
+              <Text style={styles.brandWam}>WAM</Text>
+              <Text style={styles.brandApps}>APPS</Text>
+            </View>
+
+            <View style={styles.topHeaderActions}>
+              <TouchableOpacity
+                style={styles.topHeaderIconBtn}
+                onPress={() => router.navigate("/registrations" as any)}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel="Search registrations"
+              >
+                <MaterialIcons name="search" size={scaleWidth(24)} color="#1A1A1A" />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.topHeaderIconBtn}
+                onPress={() => {
+                  const currentRoute = segments[segments.length - 1];
+                  if (currentRoute === "notifications") return;
+                  router.push("/notifications" as any);
+                }}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel="Notifications"
+              >
+                <View style={styles.topHeaderBellWrap}>
+                  <MaterialIcons
+                    name="notifications-none"
+                    size={scaleWidth(26)}
+                    color="#1A1A1A"
+                  />
+                  {unreadNotifications > 0 && (
+                    <View style={styles.topHeaderNotifBadge}>
+                      <Text style={styles.topHeaderNotifBadgeText}>
+                        {unreadNotifications > 99 ? "99+" : unreadNotifications}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.topHeaderIconBtn}
+                onPress={handleProfilePress}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel="Profile"
+              >
+                <AgentAvatar
+                  seed={avatarSeed}
+                  style={avatarStyle}
+                  size={scaleWidth(40)}
+                  fallbackInitial={initial}
+                  showAccountStatusBadge
+                  isApproved={isApproved}
+                  statusSpin={spin}
+                />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+
         <ScrollView
-          contentContainerStyle={styles.scrollContent}
+          style={styles.scrollView}
+          contentContainerStyle={[
+            styles.scrollContent,
+            { paddingBottom: tabBarClearance + scaleHeight(16) },
+          ]}
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl
@@ -954,186 +1475,211 @@ export default function DashboardScreen() {
             />
           }
         >
-          {/* Header */}
-          <View style={styles.header}>
-          <View style={styles.headerContent}>
-            {/* Left: Profile Icon Button */}
-            <TouchableOpacity
-            style={styles.profileButton}
-            onPress={handleProfilePress}
-            activeOpacity={0.7}
-          >
-            <View style={styles.profileIconContainer}>
-              <Text style={styles.profileInitial}>{initial}</Text>
-              {/* Status Badge */}
-              <View
-                style={[
-                  styles.statusBadge,
-                  isApproved && styles.statusBadgeApproved,
-                ]}
-              >
-                {isApproved ? (
-                  <Text style={styles.statusBadgeIconApproved}>✓</Text>
-                ) : (
-                  <Animated.Text
-                    style={[
-                      styles.statusBadgeIcon,
-                      { transform: [{ rotate: spin }] },
-                    ]}
-                  >
-                    ⏳
-                  </Animated.Text>
-                )}
-              </View>
-            </View>
-          </TouchableOpacity>
-
-          {/* Left: Greeting and Name */}
-          <View style={styles.greetingContainer}>
-            <View style={styles.greetingRow}>
+          {/* Welcome row */}
+          <View style={styles.welcomeSection}>
+            <View style={styles.welcomeTextBlock}>
               <Text style={styles.greeting}>{greeting}</Text>
-              {/* Online/Offline Status */}
-              <View style={[styles.statusIndicator, isOffline ? styles.statusIndicatorOffline : styles.statusIndicatorOnline]}>
-                <View style={[styles.statusDot, isOffline ? styles.statusDotOffline : styles.statusDotOnline]} />
-                <Text style={[styles.statusText, isOffline ? styles.statusTextOffline : styles.statusTextOnline]}>
-                  {isOffline ? "Offline" : "Online"}
-                </Text>
-              </View>
+              <Text style={styles.name} numberOfLines={1}>
+                {name}
+              </Text>
             </View>
-            <Text style={styles.name}>{name}</Text>
-          </View>
-
-          {/* Right: Notification Icon Button */}
-          <TouchableOpacity
-            style={[
-              styles.notificationButton,
-              unreadNotifications > 0 && styles.notificationButtonActive,
-            ]}
-            onPress={() => {
-              // Check if we're already on notifications screen to avoid duplicate stack entries
-              const currentRoute = segments[segments.length - 1];
-              if (currentRoute === "notifications") {
-                // Already on notifications, don't navigate
-                return;
-              }
-              router.push("/notifications" as any);
-            }}
-            activeOpacity={0.6}
-          >
-            <Animated.View
+            <View
               style={[
-                styles.notificationIconContainer,
-                unreadNotifications > 0 && {
-                  transform: [{ scale: notificationPulseAnim }],
-                },
+                styles.statusIndicator,
+                isOffline ? styles.statusIndicatorOffline : styles.statusIndicatorOnline,
               ]}
             >
+              <View
+                style={[
+                  styles.statusDot,
+                  isOffline ? styles.statusDotOffline : styles.statusDotOnline,
+                ]}
+              />
               <Text
                 style={[
-                  styles.notificationIcon,
-                  unreadNotifications > 0 && styles.notificationIconActive,
+                  styles.statusText,
+                  isOffline ? styles.statusTextOffline : styles.statusTextOnline,
                 ]}
               >
-                🔔
+                {isOffline ? "Offline" : "Online"}
               </Text>
-              {/* Red dot indicator when there are notifications - always visible */}
-              {unreadNotifications > 0 && (
-                <View style={styles.notificationDot} />
-              )}
-              {/* Unread Notification Badge - always visible when there are notifications */}
-              {unreadNotifications > 0 && (
-                <View style={styles.notificationBadge}>
-                  <Text style={styles.notificationBadgeText}>
-                    {unreadNotifications > 99 ? "99+" : unreadNotifications}
-                  </Text>
-                </View>
-              )}
-            </Animated.View>
-          </TouchableOpacity>
+            </View>
+          </View>
+
+        <CommissionDonutCard
+          totalEarningsKsh={walletDisplayKsh}
+          paidKsh={paidToAgentKsh}
+          segments={commissionSegments}
+        />
+
+        {/* Airtel table (from sketch) */}
+        <View style={styles.airtelTableCard}>
+          <Text style={styles.airtelTableTitle}>Airtel</Text>
+
+          <View style={styles.airtelTable}>
+            <View style={[styles.airtelTableRow, styles.airtelTableHeaderRow]}>
+              <Text style={[styles.airtelTableCell, styles.airtelTableHeadCell]}>
+                Package
+              </Text>
+              <Text style={[styles.airtelTableCell, styles.airtelTableHeadCell, styles.airtelTableMetric]}>
+                Registered
+              </Text>
+              <Text style={[styles.airtelTableCell, styles.airtelTableHeadCell, styles.airtelTableMetric]}>
+                Installed
+              </Text>
+              <Text style={[styles.airtelTableCell, styles.airtelTableHeadCell, styles.airtelTableMetric]}>
+                Commission
+              </Text>
+            </View>
+
+            <View style={styles.airtelTableRow}>
+              <Text style={styles.airtelTableCell}>Standard</Text>
+              <Text style={[styles.airtelTableCell, styles.airtelTableMetric]}>
+                {standardRegistered}
+              </Text>
+              <Text style={[styles.airtelTableCell, styles.airtelTableMetric]}>
+                {standardInstalled}
+              </Text>
+              <Text style={[styles.airtelTableCell, styles.airtelTableMetric]}>
+                KSh {airtelStandardCommissionKsh.toLocaleString()}
+              </Text>
+            </View>
+
+            <View style={styles.airtelTableRow}>
+              <Text style={styles.airtelTableCell}>Premium</Text>
+              <Text style={[styles.airtelTableCell, styles.airtelTableMetric]}>
+                {premiumRegistered}
+              </Text>
+              <Text style={[styles.airtelTableCell, styles.airtelTableMetric]}>
+                {premiumInstalled}
+              </Text>
+              <Text style={[styles.airtelTableCell, styles.airtelTableMetric]}>
+                KSh {airtelPremiumCommissionKsh.toLocaleString()}
+              </Text>
+            </View>
+
+            <View style={[styles.airtelTableRow, styles.airtelTableTotalRow]}>
+              <Text style={[styles.airtelTableCell, styles.airtelTableTotalText]}>Total</Text>
+              <Text
+                style={[
+                  styles.airtelTableCell,
+                  styles.airtelTableMetric,
+                  styles.airtelTableTotalText,
+                ]}
+              >
+                {totalRegistered}
+              </Text>
+              <Text
+                style={[
+                  styles.airtelTableCell,
+                  styles.airtelTableMetric,
+                  styles.airtelTableTotalText,
+                ]}
+              >
+                {totalInstalled}
+              </Text>
+              <Text
+                style={[
+                  styles.airtelTableCell,
+                  styles.airtelTableMetric,
+                  styles.airtelTableTotalText,
+                ]}
+              >
+                KSh {airtelInstalledCommissionKsh.toLocaleString()}
+              </Text>
+            </View>
           </View>
         </View>
 
-        {/* Divider */}
-        <View style={styles.divider} />
+        <View style={styles.statsRowSingle}>
+          <View style={styles.airtelTableCard}>
+            <Text style={[styles.airtelTableTitle, styles.safaricomTableTitle]}>
+              Safaricom
+            </Text>
 
-        {/* Balance Card */}
-        <View style={styles.balanceCard}>
-          <View style={styles.balanceContent}>
-            <View style={styles.balanceLeft}>
-              <Text style={styles.balanceLabel}>Available Balance</Text>
-              <Text style={styles.balanceAmount}>
-                KSh {balance.toLocaleString()}
-              </Text>
-              <View style={styles.totalEarningsContainer}>
-                <Text style={styles.totalEarningsLabel}>Total Earnings</Text>
-                <Text style={styles.totalEarningsAmount}>
-                  KSh {(agentData?.total_earnings ?? (premiumInstalled * 300 + standardInstalled * 150)).toLocaleString()}
+            <View style={[styles.airtelTable, styles.safaricomTotalTable]}>
+              <View style={[styles.airtelTableRow, styles.airtelTableHeaderRow]}>
+                <Text style={[styles.airtelTableCell, styles.airtelTableHeadCell]}>
+                  Package
+                </Text>
+                <Text style={[styles.airtelTableCell, styles.airtelTableHeadCell, styles.airtelTableMetric]}>
+                  Registered
+                </Text>
+                <Text style={[styles.airtelTableCell, styles.airtelTableHeadCell, styles.airtelTableMetric]}>
+                  Installed
+                </Text>
+                <Text style={[styles.airtelTableCell, styles.airtelTableHeadCell, styles.airtelTableMetric]}>
+                  Avg Price
+                </Text>
+                <Text style={[styles.airtelTableCell, styles.airtelTableHeadCell, styles.airtelTableMetric]}>
+                  30% Commission
+                </Text>
+              </View>
+
+              <View style={styles.airtelTableRow}>
+                <Text style={styles.airtelTableCell}>Fiber</Text>
+                <Text style={[styles.airtelTableCell, styles.airtelTableMetric]}>
+                  {safaricomFiberRegistered}
+                </Text>
+                <Text style={[styles.airtelTableCell, styles.airtelTableMetric]}>
+                  {safaricomFiberInstalled}
+                </Text>
+                <Text style={[styles.airtelTableCell, styles.airtelTableMetric]}>
+                  KSh {safaricomFiberAvgPackageKsh.toLocaleString()}
+                </Text>
+                <Text style={[styles.airtelTableCell, styles.airtelTableMetric]}>
+                  KSh {safaricomFiberCommissionKsh.toLocaleString()}
+                </Text>
+              </View>
+
+              <View style={styles.airtelTableRow}>
+                <Text style={styles.airtelTableCell}>Portable 5G</Text>
+                <Text style={[styles.airtelTableCell, styles.airtelTableMetric]}>
+                  {safaricomPortableRegistered}
+                </Text>
+                <Text style={[styles.airtelTableCell, styles.airtelTableMetric]}>
+                  {safaricomPortableInstalled}
+                </Text>
+                <Text style={[styles.airtelTableCell, styles.airtelTableMetric]}>
+                  KSh {safaricomPortableAvgPackageKsh.toLocaleString()}
+                </Text>
+                <Text style={[styles.airtelTableCell, styles.airtelTableMetric]}>
+                  KSh {safaricomPortableCommissionKsh.toLocaleString()}
+                </Text>
+              </View>
+
+              <View style={styles.airtelTableRow}>
+                <Text style={styles.airtelTableCell}>Dedicated WiFi</Text>
+                <Text style={[styles.airtelTableCell, styles.airtelTableMetric]}>
+                  {safaricomDedicatedRegistered}
+                </Text>
+                <Text style={[styles.airtelTableCell, styles.airtelTableMetric]}>
+                  {safaricomDedicatedInstalled}
+                </Text>
+                <Text style={[styles.airtelTableCell, styles.airtelTableMetric]}>
+                  KSh {safaricomDedicatedAvgPackageKsh.toLocaleString()}
+                </Text>
+                <Text style={[styles.airtelTableCell, styles.airtelTableMetric]}>
+                  KSh {safaricomDedicatedCommissionKsh.toLocaleString()}
+                </Text>
+              </View>
+
+              <View style={[styles.airtelTableRow, styles.safaricomTableTotalRow]}>
+                <Text style={[styles.airtelTableCell, styles.airtelTableTotalText]}>All Packages</Text>
+                <Text style={[styles.airtelTableCell, styles.airtelTableMetric, styles.airtelTableTotalText]}>
+                  {safaricomRegistered}
+                </Text>
+                <Text style={[styles.airtelTableCell, styles.airtelTableMetric, styles.airtelTableTotalText]}>{safaricomInstalled}</Text>
+                <Text style={[styles.airtelTableCell, styles.airtelTableMetric, styles.airtelTableTotalText]}>
+                  KSh {safaricomTotalAvgPackageKsh.toLocaleString()}
+                </Text>
+                <Text style={[styles.airtelTableCell, styles.airtelTableMetric, styles.airtelTableTotalText]}>
+                  KSh {safaricomInstalledCommissionKsh.toLocaleString()}
                 </Text>
               </View>
             </View>
-            <View style={styles.balanceIconContainer}>
-              <Text style={styles.balanceIcon}>💰</Text>
-            </View>
           </View>
         </View>
-
-        {/* Stats Cards */}
-        <View style={styles.statsContainer}>
-          <View style={styles.statCard}>
-            <Text style={styles.statLabel}>Total Registered</Text>
-            <Text style={styles.statValue}>{totalRegistered}</Text>
-            <View style={styles.statBreakdown}>
-              <View style={styles.statBreakdownRow}>
-                <View style={styles.statBreakdownItem}>
-                  <Text style={styles.statBreakdownLabel}>Premium</Text>
-                  <Text style={[styles.statBreakdownValue, styles.statBreakdownPremium]}>
-                    {premiumRegistered}
-                  </Text>
-                </View>
-                <View style={styles.statBreakdownDivider} />
-                <View style={styles.statBreakdownItem}>
-                  <Text style={styles.statBreakdownLabel}>Standard</Text>
-                  <Text style={[styles.statBreakdownValue, styles.statBreakdownStandard]}>
-                    {standardRegistered}
-                  </Text>
-                </View>
-              </View>
-            </View>
-          </View>
-          <View style={styles.statCard}>
-            <Text style={styles.statLabel}>Total Installed</Text>
-            <Text style={styles.statValue}>{totalInstalled}</Text>
-            <View style={styles.statBreakdown}>
-              <View style={styles.statBreakdownRow}>
-                <View style={styles.statBreakdownItem}>
-                  <Text style={styles.statBreakdownLabel}>Premium</Text>
-                  <Text style={[styles.statBreakdownValue, styles.statBreakdownPremium]}>
-                    {premiumInstalled}
-                  </Text>
-                </View>
-                <View style={styles.statBreakdownDivider} />
-                <View style={styles.statBreakdownItem}>
-                  <Text style={styles.statBreakdownLabel}>Standard</Text>
-                  <Text style={[styles.statBreakdownValue, styles.statBreakdownStandard]}>
-                    {standardInstalled}
-                  </Text>
-                </View>
-              </View>
-            </View>
-          </View>
-        </View>
-
-        {/* Register New Customer Button */}
-        <TouchableOpacity
-          style={styles.registerButton}
-          onPress={() => {
-            // Navigate to customer registration form
-            router.push("/register-customer" as any);
-          }}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.registerButtonText}>+ Register New Customer</Text>
-        </TouchableOpacity>
 
         {/* Recent Registrations Section */}
         <View style={styles.sectionHeader}>
@@ -1141,7 +1687,7 @@ export default function DashboardScreen() {
           {recentRegistrations.length > 0 && (
             <TouchableOpacity
               onPress={() => {
-                router.push("/registrations" as any);
+                router.navigate("/registrations" as any);
               }}
               activeOpacity={0.7}
             >
@@ -1169,9 +1715,16 @@ export default function DashboardScreen() {
               >
                 <View style={styles.registrationContent}>
                   <View style={styles.registrationLeft}>
-                    <Text style={styles.registrationName}>
-                      {registration.customer_name || "Customer"}
-                    </Text>
+                    <View style={styles.recentNameRow}>
+                      <Text style={styles.registrationName}>
+                        {registration.customer_name || "Customer"}
+                      </Text>
+                      {registration.source === "safaricom" && (
+                        <View style={styles.recentCarrierChip}>
+                          <Text style={styles.recentCarrierChipText}>Safaricom</Text>
+                        </View>
+                      )}
+                    </View>
                     <Text style={styles.registrationDate}>
                       {registration.created_at
                         ? new Date(registration.created_at).toLocaleDateString()
@@ -1196,19 +1749,21 @@ export default function DashboardScreen() {
                   <View
                     style={[
                       styles.registrationStatus,
-                      registration.status === "installed" &&
-                        styles.registrationStatusInstalled,
-                      registration.status === "approved" &&
-                        styles.registrationStatusApproved,
+                      {
+                        backgroundColor:
+                          REGISTRATION_STATUS_COLORS[registration.status || "pending"]?.bg ??
+                          REGISTRATION_STATUS_COLORS.pending.bg,
+                      },
                     ]}
                   >
                     <Text
                       style={[
                         styles.registrationStatusText,
-                        registration.status === "installed" &&
-                          styles.registrationStatusTextInstalled,
-                        registration.status === "approved" &&
-                          styles.registrationStatusTextApproved,
+                        {
+                          color:
+                            REGISTRATION_STATUS_COLORS[registration.status || "pending"]?.text ??
+                            REGISTRATION_STATUS_COLORS.pending.text,
+                        },
                       ]}
                     >
                       {registration.status || "pending"}
@@ -1228,14 +1783,35 @@ export default function DashboardScreen() {
           </View>
         )}
         </ScrollView>
+
+        {isApproved ? (
+          <TouchableOpacity
+            style={[
+              styles.registerFab,
+              {
+                bottom: tabBarClearance + scaleHeight(12),
+                right: scaleWidth(18),
+              },
+            ]}
+            onPress={() => setCarrierSelectVisible(true)}
+            activeOpacity={0.88}
+            accessibilityRole="button"
+            accessibilityLabel="Register new customer"
+          >
+            <View style={styles.registerFabInner}>
+              <MaterialIcons name="add" size={scaleWidth(34)} color="#FFFFFF" />
+            </View>
+          </TouchableOpacity>
+        ) : null}
       </View>
+        </>
+      )}
     </>
   );
 }
 
 // Create responsive styles
 const createStyles = () => {
-  const responsivePadding = getResponsivePadding();
   const cardPadding = getCardPadding();
   
   return StyleSheet.create({
@@ -1253,99 +1829,242 @@ const createStyles = () => {
     fontFamily: "Inter_400Regular",
     color: "#666666",
   },
+  scrollView: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+  },
   scrollContent: {
     paddingHorizontal: 10,
-    paddingTop: 0,
-    paddingBottom: scaleHeight(100), // Add bottom padding to prevent navbar overlap
+    paddingTop: scaleHeight(8),
+    paddingBottom: scaleHeight(24),
   },
-  header: {
+  topHeader: {
     backgroundColor: "#FFFFFF",
-    borderBottomWidth: 1,
-    borderBottomColor: "#E0E0E0",
+    paddingHorizontal: scaleWidth(20),
+    paddingTop: scaleHeight(14),
+    paddingBottom: scaleHeight(14),
   },
-  headerContent: {
+  topHeaderRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
   },
-  divider: {
-    height: 1,
-    backgroundColor: "#E0E0E0",
-    marginBottom: 20,
+  brandRow: {
+    flexDirection: "row",
+    alignItems: "baseline",
   },
-  balanceCard: {
+  brandWam: {
+    fontSize: scaleFont(22),
+    fontFamily: "Poppins_700Bold",
+    color: "#1A1A1A",
+    letterSpacing: 0.5,
+  },
+  brandApps: {
+    fontSize: scaleFont(22),
+    fontFamily: "Poppins_700Bold",
+    color: "#F5A623",
+    letterSpacing: 0.5,
+    marginLeft: scaleWidth(2),
+  },
+  topHeaderActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: scaleWidth(4),
+  },
+  topHeaderIconBtn: {
+    padding: scaleWidth(6),
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  topHeaderBellWrap: {
+    position: "relative",
+    width: scaleWidth(32),
+    height: scaleWidth(32),
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  topHeaderNotifBadge: {
+    position: "absolute",
+    top: -2,
+    right: -4,
+    minWidth: scaleWidth(18),
+    height: scaleWidth(18),
+    borderRadius: scaleWidth(9),
+    backgroundColor: "#FF3B30",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 4,
+    borderWidth: 2,
+    borderColor: "#FFFFFF",
+  },
+  topHeaderNotifBadgeText: {
+    fontSize: scaleFont(10),
+    fontFamily: "Inter_600SemiBold",
+    color: "#FFFFFF",
+  },
+  welcomeSection: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: scaleHeight(16),
+    paddingHorizontal: scaleWidth(6),
+  },
+  welcomeTextBlock: {
+    flex: 1,
+    marginRight: scaleWidth(12),
+  },
+  airtelTableCard: {
     backgroundColor: "#FFFFFF",
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 20,
+    borderRadius: scaleWidth(12),
+    padding: cardPadding,
+    marginBottom: scaleHeight(20),
+    borderWidth: 1,
+    borderColor: "#F0F0F0",
     shadowColor: "#000000",
     shadowOffset: {
       width: 0,
-      height: 2,
+      height: 1,
     },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  airtelTableTitle: {
+    fontSize: scaleFont(12),
+    fontFamily: "Inter_600SemiBold",
+    color: "#E60012",
+    marginBottom: scaleHeight(10),
+    textTransform: "uppercase",
+    letterSpacing: 0.35,
+  },
+  airtelTable: {
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    borderRadius: scaleWidth(10),
+    overflow: "hidden",
+  },
+  airtelTableHeaderRow: {
+    backgroundColor: "#F8FAFC",
+  },
+  airtelTableRow: {
+    flexDirection: "row",
+    borderBottomWidth: 1,
+    borderBottomColor: "#E5E7EB",
+  },
+  airtelTableCell: {
+    flex: 1,
+    paddingVertical: scaleHeight(10),
+    paddingHorizontal: scaleWidth(10),
+    fontSize: scaleFont(13),
+    fontFamily: "Inter_500Medium",
+    color: "#334155",
+    borderRightWidth: 1,
+    borderRightColor: "#E5E7EB",
+  },
+  airtelTableHeadCell: {
+    fontFamily: "Inter_600SemiBold",
+    color: "#475569",
+  },
+  airtelTableMetric: {
+    textAlign: "center",
+  },
+  airtelTableTotalRow: {
+    backgroundColor: "#FFF7ED",
+    borderBottomWidth: 0,
+  },
+  safaricomTableTotalRow: {
+    backgroundColor: "#ECFDF3",
+    borderBottomWidth: 0,
+  },
+  airtelTableTotalText: {
+    fontFamily: "Poppins_600SemiBold",
+    color: "#1E293B",
+  },
+  safaricomTableTitle: {
+    color: "#00A651",
+  },
+  safaricomPackageTables: {
+    gap: scaleHeight(10),
+  },
+  safaricomPackageCard: {
+    backgroundColor: "#F8FFFB",
+    borderRadius: scaleWidth(10),
+    borderWidth: 1,
+    borderColor: "#D1FAE5",
+    padding: scaleWidth(8),
+  },
+  safaricomPackageTitle: {
+    fontSize: scaleFont(12),
+    fontFamily: "Inter_600SemiBold",
+    color: "#047857",
+    marginBottom: scaleHeight(6),
+  },
+  safaricomTotalTable: {
+    marginTop: scaleHeight(10),
+  },
+  statsRowSingle: {
+    width: "100%",
+    marginBottom: scaleHeight(20),
+  },
+  statCardWide: {
+    flex: 1,
+    width: "100%",
+    backgroundColor: "#FFFFFF",
+    borderRadius: scaleWidth(12),
+    padding: cardPadding,
+    shadowColor: "#000000",
+    shadowOffset: {
+      width: 0,
+      height: 1,
+    },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
     elevation: 2,
     borderWidth: 1,
     borderColor: "#F0F0F0",
   },
-  balanceContent: {
+  safMetricsRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
+    alignItems: "stretch",
+    marginTop: scaleHeight(4),
   },
-  balanceLeft: {
+  safMetric: {
     flex: 1,
-  },
-  balanceLabel: {
-    fontSize: 12,
-    fontFamily: "Inter_400Regular",
-    color: "#999999",
-    marginBottom: 6,
-    letterSpacing: 0.2,
-  },
-  balanceAmount: {
-    fontSize: 24,
-    fontFamily: "Poppins_700Bold",
-    color: "#0066CC",
-    letterSpacing: 0.3,
-  },
-  totalEarningsContainer: {
-    marginTop: 12,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: "#F0F0F0",
-  },
-  totalEarningsLabel: {
-    fontSize: 11,
-    fontFamily: "Inter_400Regular",
-    color: "#999999",
-    marginBottom: 4,
-    letterSpacing: 0.2,
-  },
-  totalEarningsAmount: {
-    fontSize: 18,
-    fontFamily: "Poppins_600SemiBold",
-    color: "#4CAF50",
-    letterSpacing: 0.2,
-  },
-  balanceIconContainer: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: "#E6F2FF",
-    justifyContent: "center",
     alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: scaleHeight(4),
   },
-  balanceIcon: {
-    fontSize: 24,
+  safMetricDivider: {
+    width: 1,
+    backgroundColor: "#E8E8E8",
+    marginVertical: scaleHeight(4),
   },
-  statsContainer: {
-    flexDirection: "row",
-    gap: scaleWidth(12),
-    marginBottom: scaleHeight(20),
+  safMetricLabel: {
+    fontSize: scaleFont(11),
+    fontFamily: "Inter_400Regular",
+    color: "#888888",
+    marginBottom: scaleHeight(4),
+  },
+  safMetricValue: {
+    fontSize: scaleFont(16),
+    fontFamily: "Poppins_600SemiBold",
+    color: "#333333",
+  },
+  statCarrierAirtel: {
+    fontSize: scaleFont(11),
+    fontFamily: "Inter_600SemiBold",
+    color: "#E60012",
+    marginBottom: scaleHeight(6),
+    letterSpacing: 0.3,
+    textTransform: "uppercase",
+  },
+  statCarrierSaf: {
+    fontSize: scaleFont(11),
+    fontFamily: "Inter_600SemiBold",
+    color: "#00A651",
+    marginBottom: scaleHeight(6),
+    letterSpacing: 0.3,
+    textTransform: "uppercase",
   },
   statCard: {
     flex: 1,
@@ -1417,28 +2136,26 @@ const createStyles = () => {
     backgroundColor: "#E0E0E0",
     marginHorizontal: scaleWidth(8),
   },
-  registerButton: {
-    backgroundColor: "#0066CC",
-    borderRadius: scaleWidth(12),
-    paddingVertical: scaleHeight(16),
-    paddingHorizontal: responsivePadding,
+  registerFab: {
+    position: "absolute",
+    width: scaleWidth(60),
+    height: scaleWidth(60),
+    borderRadius: scaleWidth(30),
+    backgroundColor: "#005EB8",
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: scaleHeight(24),
-    shadowColor: "#0066CC",
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
+    borderWidth: 2,
+    borderColor: "rgba(255,255,255,0.28)",
+    shadowColor: "#004A94",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.38,
+    shadowRadius: 14,
+    elevation: 14,
   },
-  registerButtonText: {
-    fontSize: 16,
-    fontFamily: "Poppins_600SemiBold",
-    color: "#FFFFFF",
-    letterSpacing: 0.3,
+  registerFabInner: {
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 1,
   },
   sectionHeader: {
     flexDirection: "row",
@@ -1484,12 +2201,32 @@ const createStyles = () => {
   registrationLeft: {
     flex: 1,
   },
+  recentNameRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    marginBottom: 4,
+    gap: 8,
+  },
+  recentCarrierChip: {
+    backgroundColor: "rgba(0, 166, 81, 0.12)",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: "rgba(0, 166, 81, 0.35)",
+  },
+  recentCarrierChipText: {
+    fontSize: 10,
+    fontFamily: "Inter_600SemiBold",
+    color: "#00A651",
+  },
   registrationName: {
     fontSize: 16,
     fontFamily: "Poppins_600SemiBold",
     color: "#333333",
-    marginBottom: 4,
     letterSpacing: 0.2,
+    flexShrink: 1,
   },
   registrationDate: {
     fontSize: 12,
@@ -1565,21 +2302,12 @@ const createStyles = () => {
     textAlign: "center",
     letterSpacing: 0.2,
   },
-  greetingContainer: {
-    flex: 1,
-    marginLeft: 12,
-  },
-  greetingRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 2,
-  },
   greeting: {
-    fontSize: 12,
+    fontSize: scaleFont(13),
     fontFamily: "Inter_400Regular",
     color: "#666666",
     letterSpacing: 0.2,
-    marginRight: 8,
+    marginBottom: scaleHeight(2),
   },
   statusIndicator: {
     flexDirection: "row",
@@ -1618,11 +2346,10 @@ const createStyles = () => {
     color: "#E65100",
   },
   name: {
-    fontSize: 18,
+    fontSize: scaleFont(20),
     fontFamily: "Poppins_600SemiBold",
-    color: "#333333",
+    color: "#1A1A1A",
     letterSpacing: 0.3,
-    marginTop: 4,
   },
   statusBanner: {
     flexDirection: "row",
@@ -1717,129 +2444,6 @@ const createStyles = () => {
   },
   agentStatusTextRejected: {
     color: "#616161",
-  },
-  profileButton: {
-    marginRight: 0,
-  },
-  notificationButton: {
-    padding: 8,
-    borderRadius: 20,
-    backgroundColor: "#F5F7FA",
-    borderWidth: 1,
-    borderColor: "#E0E0E0",
-    shadowColor: "#000000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  notificationButtonActive: {
-    backgroundColor: "#FFF3E0",
-    borderColor: "#FF9800",
-    borderWidth: 2,
-    shadowColor: "#FF9800",
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
-    elevation: 6,
-  },
-  notificationIconContainer: {
-    position: "relative",
-    width: 32,
-    height: 32,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  notificationDot: {
-    position: "absolute",
-    top: 0,
-    right: 0,
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: "#FF3B30",
-    borderWidth: 2.5,
-    borderColor: "#FFFFFF",
-    zIndex: 10,
-    shadowColor: "#FF3B30",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.6,
-    shadowRadius: 2,
-    elevation: 5,
-  },
-  notificationIcon: {
-    fontSize: 22,
-  },
-  notificationIconActive: {
-    fontSize: 24,
-  },
-  notificationBadge: {
-    position: "absolute",
-    top: -8,
-    right: -8,
-    minWidth: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: "#FF3B30",
-    justifyContent: "center",
-    alignItems: "center",
-    paddingHorizontal: 5,
-    borderWidth: 3,
-    borderColor: "#FFFFFF",
-    shadowColor: "#FF3B30",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.5,
-    shadowRadius: 4,
-    elevation: 6,
-    zIndex: 10,
-  },
-  notificationBadgeText: {
-    fontSize: 11,
-    fontFamily: "Inter_600SemiBold",
-    color: "#FFFFFF",
-    fontWeight: "bold",
-    letterSpacing: 0.2,
-  },
-  profileIconContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "#0066CC",
-    justifyContent: "center",
-    alignItems: "center",
-    position: "relative",
-  },
-  profileInitial: {
-    fontSize: 20,
-    fontFamily: "Poppins_600SemiBold",
-    color: "#FFFFFF",
-    letterSpacing: 0.3,
-  },
-  statusBadge: {
-    position: "absolute",
-    bottom: -2,
-    right: -2,
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 2,
-    borderColor: "#F5F7FA",
-    backgroundColor: "#FFF4E6", // Light orange background for pending
-  },
-  statusBadgeApproved: {
-    backgroundColor: "#4CAF50",
-  },
-  statusBadgeIcon: {
-    fontSize: 9,
-    color: "#FFA500",
-    fontWeight: "bold",
-  },
-  statusBadgeIconApproved: {
-    fontSize: 10,
-    color: "#FFFFFF",
-    fontWeight: "bold",
-    lineHeight: 12,
   },
   body: {
     flex: 1,

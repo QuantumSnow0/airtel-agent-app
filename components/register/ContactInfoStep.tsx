@@ -17,9 +17,9 @@ export default function ContactInfoStep({
 
   return (
     <View style={registerStyles.form}>
-      {/* Airtel Phone Field */}
+      {/* Primary Phone Field */}
       <View style={registerStyles.fieldContainer}>
-        <Text style={registerStyles.label}>Airtel Phone Number</Text>
+        <Text style={registerStyles.label}>Primary Phone Number</Text>
         <Controller
           control={control}
           name="airtelPhone"
@@ -27,7 +27,7 @@ export default function ContactInfoStep({
             <>
               <TextInput
                 style={[registerStyles.input, error && registerStyles.inputError]}
-                placeholder="Enter your Airtel number"
+                placeholder="Enter your primary number"
                 placeholderTextColor="#999999"
                 value={value}
                 onChangeText={onChange}

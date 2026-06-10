@@ -13,10 +13,12 @@ function cleanEnvVar(value: string | undefined, defaultValue: string): string {
 }
 
 // Microsoft Forms Configuration (set as Edge Function secrets)
-const MS_FORMS_FORM_ID = cleanEnvVar(
-  Deno.env.get("MS_FORMS_FORM_ID"),
-  "JzfHFpyXgk2zp-tqL93-V1fdJne7SIlMnh7yZpkW8f5UNE5JMkcyMEtYSDhZUEdZUVoyUDZBSlA1Wi4u"
-);
+const MS_FORMS_FORM_ID_OLD = "JzfHFpyXgk2zp-tqL93-V1fdJne7SIlMnh7yZpkW8f5UNE5JMkcyMEtYSDhZUEdZUVoyUDZBSlA1Wi4u";
+const MS_FORMS_FORM_ID_NEW = "JzfHFpyXgk2zp-tqL93-V1fdJne7SIlMnh7yZpkW8f5UM0syWjU3MVVKMTczNkRPN0xQRkFEWloxTS4u";
+const MS_FORMS_FORM_ID = (() => {
+  const envVal = cleanEnvVar(Deno.env.get("MS_FORMS_FORM_ID"), MS_FORMS_FORM_ID_NEW);
+  return envVal === MS_FORMS_FORM_ID_OLD ? MS_FORMS_FORM_ID_NEW : envVal;
+})();
 const MS_FORMS_TENANT_ID = cleanEnvVar(
   Deno.env.get("MS_FORMS_TENANT_ID"),
   "16c73727-979c-4d82-b3a7-eb6a2fddfe57"
@@ -39,7 +41,7 @@ const MS_FORMS_RESPONSE_PAGE_URL = (() => {
   return constructedUrl;
 })();
 
-// Question IDs for Microsoft Forms
+// Question IDs for Microsoft Forms (shared fields)
 const QUESTION_IDS = {
   agentType: "r0feee2e2bc7c44fb9af400709e7e6276",
   enterpriseCP: "r52e9f6e788444e2a96d9e30de5d635d8",
@@ -57,8 +59,26 @@ const QUESTION_IDS = {
   deliveryLandmark: "r7a69684d43ec4bf1b6971b21a8b4dd18",
   visitDate: "r68b858271107400189b8d681d1b19c38",
   visitTime: "rae98a58cb06949c1a3222443368aa64e",
-  installationLocation: "r55f328ec020a4a629f58639cd56ecd85",
-  optionalField: "r1e3b5a91acaa465b8aab76bab2cad94a", // Optional field (can be null)
+  installationLocation: "r99215bf0748f4e949b127b4a344e44ec", // Nairobi / fallback for town-specific columns
+  optionalField: "r1e3b5a91acaa465b8aab76bab2cad94a", // Optional field (answer1: null)
+};
+
+// Town-specific "Installation Location" column IDs (one column per town)
+const TOWN_TO_LOCATION_QUESTION_ID: Record<string, string> = {
+  BUNGOMA: "rbf5746ac7f5e4d2cab54a1b8df24b5e1",
+  ELDORET: "r24b818b049314910ad025b6b727e64a3",
+  GARISSA: "r2fc4cb930c154b5e8f1a354d4ac354a5",
+  KAKAMEGA: "r28f2b48873504822b4010ba668be5267",
+  KILIFI: "rafb9a2cdb406426fa865a66baa42b3a0",
+  KISII: "r77cbe5ec85a8411ca451f323c9336c7e",
+  KISUMU: "r39626af0978948d780a63643b5a14ef7",
+  KITALE: "rcae794cab7ff49bbacecf526f6c7f4ff",
+  MACHAKOS: "re7e1cac4a9424be9a965efd0e7065812",
+  MERU: "rd95772902dc54356bce0f3d11204586a",
+  MIGORI: "r3a023823fcfe46798b4b8af5051dc632",
+  MOMBASA: "r6c5bd7f72fde4c51b2ac8661f3d3afac",
+  NAIROBI: "r99215bf0748f4e949b127b4a344e44ec",
+  NAKURU: "r37c5c841668f44269a3410c03e9eb055",
 };
 
 // Helper functions
@@ -103,6 +123,12 @@ function getPackageName(pkg: "standard" | "premium" | string | undefined | null)
     premium: "5G _30Mbps_30days at Ksh.3999",
   };
   return map[pkg.toLowerCase()] || pkg;
+}
+
+function normalizeUnitsRequired(value: unknown): number {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 1) return 1;
+  return Math.min(99, Math.floor(n));
 }
 
 function formatInstallationLocation(town: string | undefined | null, location: string | undefined | null): string {
@@ -151,6 +177,7 @@ serve(async (req) => {
       alternateNumber,
       email,
       preferredPackage,
+      unitsRequired,
       installationTown,
       deliveryLandmark,
       installationLocation,
@@ -350,15 +377,21 @@ serve(async (req) => {
     const formattedAlternateNumber = formatPhone(alternateNumber);
     const formattedAgentMobile = formatPhone(agentMobile);
     const fullPackageName = getPackageName(preferredPackage as "standard" | "premium");
+    const unitsRequiredValue = normalizeUnitsRequired(unitsRequired);
     const time24Hour = convertTo24Hour(visitTime);
 
     // ⚠️ CRITICAL: Convert visitDate from M/d/yyyy (React Native format) to YYYY-MM-DD (Microsoft Forms format)
-    // React Native sends: "1/13/2026" -> Microsoft Forms expects: "2026-01-13"
     let formattedVisitDate = visitDate;
     try {
-      const [month, day, year] = visitDate.split("/").map(Number);
-      const date = new Date(year, month - 1, day);
-      formattedVisitDate = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(visitDate)) {
+        formattedVisitDate = visitDate;
+      } else {
+        const [month, day, year] = visitDate.split("/").map(Number);
+        const date = new Date(year, month - 1, day);
+        if (!isNaN(date.getTime())) {
+          formattedVisitDate = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+        }
+      }
       console.log("📅 Date conversion:", { input: visitDate, output: formattedVisitDate });
     } catch (e) {
       console.warn("⚠️ Failed to convert date format, using original:", visitDate);
@@ -375,14 +408,18 @@ serve(async (req) => {
       return String(value);
     };
 
+    // Installation location: use town-specific question ID (one column per town)
+    const installationLocationQuestionId =
+      TOWN_TO_LOCATION_QUESTION_ID[normalizedTown] ?? QUESTION_IDS.installationLocation;
+
     const answers = [
       { questionId: QUESTION_IDS.agentType, answer1: "Enterprise" },
       { questionId: QUESTION_IDS.enterpriseCP, answer1: "WAM APPLICATIONS" },
       { questionId: QUESTION_IDS.agentName, answer1: safeString(agentName) },
       { questionId: QUESTION_IDS.agentMobile, answer1: safeString(formattedAgentMobile) },
       { questionId: QUESTION_IDS.leadType, answer1: "Confirmed" },
-      { questionId: QUESTION_IDS.totalUnitsRequired, answer1: "1" },
       { questionId: QUESTION_IDS.connectionType, answer1: "SmartConnect (5G ODU)" },
+      { questionId: QUESTION_IDS.totalUnitsRequired, answer1: safeString(unitsRequiredValue) },
       { questionId: QUESTION_IDS.customerName, answer1: safeString(customerName) },
       { questionId: QUESTION_IDS.airtelNumber, answer1: safeString(formattedAirtelNumber) },
       { questionId: QUESTION_IDS.alternateNumber, answer1: safeString(formattedAlternateNumber) },
@@ -392,8 +429,8 @@ serve(async (req) => {
       { questionId: QUESTION_IDS.visitTime, answer1: safeString(time24Hour) },
       { questionId: QUESTION_IDS.deliveryLandmark, answer1: safeString(deliveryLandmark) },
       { questionId: QUESTION_IDS.installationTown, answer1: safeString(normalizedTown) },
-      { questionId: QUESTION_IDS.installationLocation, answer1: safeString(installationLocationFormatted) },
-      { questionId: QUESTION_IDS.optionalField, answer1: null }, // Optional field - set to null as per form structure
+      { questionId: installationLocationQuestionId, answer1: safeString(installationLocationFormatted) },
+      { questionId: QUESTION_IDS.optionalField, answer1: null },
     ];
 
     // Log answer values for debugging
@@ -405,6 +442,7 @@ serve(async (req) => {
       alternateNumber: safeString(formattedAlternateNumber),
       email: safeString(email),
       preferredPackage: safeString(fullPackageName),
+      unitsRequired: safeString(unitsRequiredValue),
       visitDate: safeString(visitDate),
       visitTime: safeString(time24Hour),
       deliveryLandmark: safeString(deliveryLandmark),
@@ -423,7 +461,7 @@ serve(async (req) => {
 
     // Step 3: Submit to Microsoft Forms
     // ⚠️ VALIDATION: User ID and Tenant ID must be GUIDs
-    // Form ID format: JzfHFpyXgk2zp-tqL93-V1fdJne7SIlMnh7yZpkW8f5UQjc4M0wwWU9HRTJPRjMxWlc5QjRLOUhaMC4u
+    // Form ID: set via MS_FORMS_FORM_ID secret (see MS_FORMS_FORM_ID_NEW default)
     // User ID format: 7726dd57-48bb-4c89-9e1e-f2669916f1fe (GUID with dashes)
     const guidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     

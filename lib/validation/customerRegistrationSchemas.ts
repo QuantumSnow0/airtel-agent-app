@@ -27,6 +27,12 @@ const packageSchema = z.enum(["standard", "premium"], {
   errorMap: () => ({ message: "Package must be either 'standard' or 'premium'" }),
 });
 
+const unitsRequiredSchema = z
+  .number({ invalid_type_error: "Quantity must be a number" })
+  .int("Quantity must be a whole number")
+  .min(1, "Quantity must be at least 1")
+  .max(99, "Quantity cannot exceed 99");
+
 // Town validation
 const townSchema = z.enum(ALL_TOWNS as [string, ...string[]], {
   errorMap: () => ({ message: "Please select a valid town" }),
@@ -99,6 +105,7 @@ export const customerInfoSchema = z.object({
   alternateNumber: phoneSchema,
   email: emailSchema,
   preferredPackage: packageSchema,
+  unitsRequired: unitsRequiredSchema,
 });
 
 // Installation Details Schema (Step 2)

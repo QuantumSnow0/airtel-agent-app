@@ -1,6 +1,17 @@
+import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
-import { Platform } from "react-native";
+import { Linking, Platform } from "react-native";
 import { supabase } from "../supabase";
+
+/** True when running inside Expo Go (push token fetch often hangs or is unsupported). */
+export function isExpoGo(): boolean {
+  return Constants.appOwnership === "expo";
+}
+
+export type NotificationPermissionState = "granted" | "denied" | "undetermined";
+
+/** Must match `defaultChannel` in app.json and channelId in push payloads. */
+export const ANDROID_NOTIFICATION_CHANNEL_ID = "default";
 
 // Configure how notifications are handled when app is in foreground
 Notifications.setNotificationHandler({
@@ -14,10 +25,102 @@ Notifications.setNotificationHandler({
 });
 
 /**
+ * Android 8+ requires a high-importance channel for heads-up banners when the app is closed.
+ */
+export async function ensureAndroidNotificationChannel(): Promise<void> {
+  if (Platform.OS !== "android") return;
+
+  await Notifications.setNotificationChannelAsync(ANDROID_NOTIFICATION_CHANNEL_ID, {
+    name: "General",
+    description: "Payments, registrations, and account updates",
+    importance: Notifications.AndroidImportance.MAX,
+    vibrationPattern: [0, 250, 250, 250],
+    lightColor: "#0066CC",
+    sound: "default",
+    enableVibrate: true,
+    showBadge: true,
+    lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+    bypassDnd: false,
+  });
+}
+
+export async function getNotificationPermissionState(): Promise<NotificationPermissionState> {
+  try {
+    const { status } = await Notifications.getPermissionsAsync();
+    if (status === "granted") return "granted";
+    if (status === "denied") return "denied";
+    return "undetermined";
+  } catch {
+    return "undetermined";
+  }
+}
+
+/** Short steps for the device settings screen (shown in the enable prompt). */
+export function getNotificationSettingsInstructions(): string {
+  if (Platform.OS === "ios") {
+    return "Go to Settings → WAM Apps → Notifications, then turn on Allow Notifications.";
+  }
+  return "Go to Settings → Apps → WAM Apps → Notifications, then allow notifications.";
+}
+
+async function registerDeviceTokenInBackground(agentId: string): Promise<void> {
+  try {
+    const token = await getDeviceToken();
+    if (token) await registerDeviceToken(agentId, token);
+  } catch (error) {
+    console.warn("Background device token registration failed:", error);
+  }
+}
+
+/**
+ * Try the system permission dialog, or open app settings if already denied.
+ * Registers the device token when permission is granted and agentId is provided.
+ */
+export async function enableNotificationsForAgent(
+  agentId?: string
+): Promise<"granted" | "denied" | "settings_opened"> {
+  await ensureAndroidNotificationChannel();
+
+  const state = await getNotificationPermissionState();
+  if (state === "granted") {
+    if (agentId && !isExpoGo()) {
+      void registerDeviceTokenInBackground(agentId);
+    }
+    return "granted";
+  }
+
+  if (state === "undetermined") {
+    const { status } = await Notifications.requestPermissionsAsync({
+      ios: {
+        allowAlert: true,
+        allowBadge: true,
+        allowSound: true,
+      },
+    });
+    if (status === "granted") {
+      if (agentId && !isExpoGo()) {
+        void registerDeviceTokenInBackground(agentId);
+      }
+      return "granted";
+    }
+    if (status === "denied") {
+      await Linking.openSettings();
+      return "settings_opened";
+    }
+    return "denied";
+  }
+
+  await Linking.openSettings();
+  return "settings_opened";
+}
+
+/**
  * Request notification permissions and return status
  */
 export async function requestNotificationPermissions(): Promise<boolean> {
   try {
+    await ensureAndroidNotificationChannel();
+
     console.log("🔐 Checking existing notification permissions...");
     const { status: existingStatus } = await Notifications.getPermissionsAsync();
     console.log("📊 Existing permission status:", existingStatus);
@@ -25,7 +128,13 @@ export async function requestNotificationPermissions(): Promise<boolean> {
 
     if (existingStatus !== "granted") {
       console.log("🔐 Requesting notification permissions...");
-      const { status } = await Notifications.requestPermissionsAsync();
+      const { status } = await Notifications.requestPermissionsAsync({
+        ios: {
+          allowAlert: true,
+          allowBadge: true,
+          allowSound: true,
+        },
+      });
       console.log("📊 New permission status:", status);
       finalStatus = status;
     }
@@ -42,18 +151,32 @@ export async function requestNotificationPermissions(): Promise<boolean> {
 /**
  * Get the device push notification token
  */
-export async function getDeviceToken(): Promise<string | null> {
+export async function getDeviceToken(timeoutMs = 12_000): Promise<string | null> {
+  if (isExpoGo()) {
+    console.log("⚠️ Skipping push token in Expo Go — use a dev/production build to test push");
+    return null;
+  }
+
   try {
+    await ensureAndroidNotificationChannel();
+
     console.log("📱 Getting Expo push token...");
-    console.log("📋 Project ID: 79ca40ff-774f-4322-bf65-0adc31b78223");
-    const tokenData = await Notifications.getExpoPushTokenAsync({
-      projectId: "79ca40ff-774f-4322-bf65-0adc31b78223", // From app.json
+    const projectId = "79ca40ff-774f-4322-bf65-0adc31b78223";
+    const tokenPromise = Notifications.getExpoPushTokenAsync({ projectId });
+    const timeoutPromise = new Promise<null>((resolve) => {
+      setTimeout(() => resolve(null), timeoutMs);
     });
+
+    const tokenData = await Promise.race([tokenPromise, timeoutPromise]);
+    if (!tokenData) {
+      console.warn("⚠️ getExpoPushTokenAsync timed out or returned nothing");
+      return null;
+    }
+
     console.log("✅ Token obtained, length:", tokenData.data?.length || 0);
     return tokenData.data;
   } catch (error) {
     console.error("❌ Error getting device token:", error);
-    console.error("Error details:", JSON.stringify(error, null, 2));
     return null;
   }
 }

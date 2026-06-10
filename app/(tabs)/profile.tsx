@@ -21,26 +21,41 @@ import {
   Inter_600SemiBold,
 } from "@expo-google-fonts/inter";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { supabase } from "../lib/supabase";
+import { supabase } from "../../lib/supabase";
 import {
   CachedAgentData,
   getCachedAgentData,
   clearAgentDataCache,
-} from "../lib/cache/agentCache";
+} from "../../lib/cache/agentCache";
 import {
   clearDashboardDataCache,
   getCachedDashboardData,
-} from "../lib/cache/dashboardCache";
-import { clearNotificationsCache } from "../lib/cache/notificationsCache";
-import { clearRegistrationsCache } from "../lib/cache/registrationsCache";
+} from "../../lib/cache/dashboardCache";
+import { clearNotificationsCache } from "../../lib/cache/notificationsCache";
+import { clearRegistrationsCache } from "../../lib/cache/registrationsCache";
 import {
   scaleWidth,
   scaleHeight,
   scaleFont,
   getResponsivePadding,
   getCardPadding,
-} from "../lib/utils/responsive";
-import { isOnline } from "../lib/services/syncService";
+} from "../../lib/utils/responsive";
+import { isOnline } from "../../lib/services/syncService";
+import { fetchWalletCommissionKsh } from "../../lib/commissions/walletCommission";
+import { AgentAvatar } from "../../components/AgentAvatar";
+import { AppRatingPrompt } from "../../components/AppRatingPrompt";
+import { NotificationEnablePrompt } from "../../components/NotificationEnablePrompt";
+import { markAppRatingSubmitted } from "../../lib/appRatingPromptStorage";
+import {
+  markAppRatingPlayStoreOpened,
+  submitAppRating,
+} from "../../lib/services/appRatingService";
+import { getWamTabBarOffset } from "../../components/WamTabBar";
+import { getNotificationPermissionState } from "../../lib/services/pushNotificationService";
+import {
+  getAgentAvatarSeed,
+  getDiceBearStyleForName,
+} from "../../lib/utils/dicebear";
 
 // Helper function to get first letter of name
 const getInitial = (name?: string, email?: string): string => {
@@ -119,6 +134,12 @@ export default function ProfileScreen() {
   const [totalRegistered, setTotalRegistered] = useState(0);
   const [totalInstalled, setTotalInstalled] = useState(0);
   const [balance, setBalance] = useState(0);
+  const [notificationsGranted, setNotificationsGranted] = useState(true);
+  const [notificationPromptVisible, setNotificationPromptVisible] = useState(false);
+  const [ratingPromptVisible, setRatingPromptVisible] = useState(false);
+  /** Combined Airtel + Safaricom installed commission (matches dashboard wallet). */
+  const [totalEarningsKsh, setTotalEarningsKsh] = useState(0);
+  const [paidFromLedgerKsh, setPaidFromLedgerKsh] = useState(0);
   const [isOffline, setIsOffline] = useState(false);
 
   const [fontsLoaded] = useFonts({
@@ -173,11 +194,19 @@ export default function ProfileScreen() {
         const cachedDashboardData = await getCachedDashboardData();
         if (cachedAgentData) {
           setAgentData(cachedAgentData);
-          setBalance(cachedAgentData.available_balance || 0);
         }
         if (cachedDashboardData) {
           setTotalRegistered(cachedDashboardData.totalRegistered || 0);
           setTotalInstalled(cachedDashboardData.totalInstalled || 0);
+          const w = cachedDashboardData.balance ?? 0;
+          setPaidFromLedgerKsh(0);
+          setBalance(w);
+          setTotalEarningsKsh(w);
+        } else if (cachedAgentData) {
+          const w = cachedAgentData.available_balance || 0;
+          setPaidFromLedgerKsh(0);
+          setBalance(w);
+          setTotalEarningsKsh(w);
         }
         setIsLoading(false);
         return;
@@ -188,11 +217,14 @@ export default function ProfileScreen() {
       const cachedDashboardData = await getCachedDashboardData();
       if (cachedAgentData) {
         setAgentData(cachedAgentData);
-        setBalance(cachedAgentData.available_balance || 0);
       }
       if (cachedDashboardData) {
         setTotalRegistered(cachedDashboardData.totalRegistered || 0);
         setTotalInstalled(cachedDashboardData.totalInstalled || 0);
+        const w0 = cachedDashboardData.balance ?? 0;
+        setPaidFromLedgerKsh(0);
+        setBalance(w0);
+        setTotalEarningsKsh(w0);
       }
 
       // Fetch fresh data from database
@@ -206,31 +238,70 @@ export default function ProfileScreen() {
         console.error("Error loading agent data:", agentError);
       } else {
         setAgentData(agent);
-        setBalance(agent.available_balance || 0);
       }
 
-      // Load registration statistics
-      const { count: registeredCount } = await supabase
-        .from("customer_registrations")
-        .select("*", { count: "exact", head: true })
-        .eq("agent_id", currentUser.id);
+      // Load registration statistics (Airtel + Safaricom)
+      const [
+        { count: airtelRegisteredCount },
+        { count: safaricomRegisteredCount },
+        { count: airtelInstalledCount },
+        { count: safaricomInstalledCount },
+      ] = await Promise.all([
+        supabase
+          .from("customer_registrations")
+          .select("*", { count: "exact", head: true })
+          .eq("agent_id", currentUser.id),
+        supabase
+          .from("safaricom_registrations")
+          .select("*", { count: "exact", head: true })
+          .eq("agent_id", currentUser.id),
+        supabase
+          .from("customer_registrations")
+          .select("*", { count: "exact", head: true })
+          .eq("agent_id", currentUser.id)
+          .eq("status", "installed"),
+        supabase
+          .from("safaricom_registrations")
+          .select("*", { count: "exact", head: true })
+          .eq("agent_id", currentUser.id)
+          .eq("status", "installed"),
+      ]);
 
-      if (registeredCount !== null) {
-        setTotalRegistered(registeredCount);
-      }
+      setTotalRegistered(
+        (airtelRegisteredCount ?? 0) + (safaricomRegisteredCount ?? 0)
+      );
+      setTotalInstalled((airtelInstalledCount ?? 0) + (safaricomInstalledCount ?? 0));
 
-      const { count: installedCount } = await supabase
-        .from("customer_registrations")
-        .select("*", { count: "exact", head: true })
-        .eq("agent_id", currentUser.id)
-        .eq("status", "installed");
-
-      if (installedCount !== null) {
-        setTotalInstalled(installedCount);
+      try {
+        const walletKsh = await fetchWalletCommissionKsh(currentUser.id);
+        const { data: paymentRows, error: paymentsErr } = await supabase
+          .from("agent_payments")
+          .select("amount_ksh")
+          .eq("agent_id", currentUser.id);
+        const paidKsh =
+          !paymentsErr && paymentRows?.length
+            ? paymentRows.reduce(
+                (sum, row) =>
+                  sum +
+                  Number((row as { amount_ksh?: number | string | null }).amount_ksh ?? 0),
+                0
+              )
+            : 0;
+        setPaidFromLedgerKsh(Math.max(0, Math.round(paidKsh)));
+        setBalance(Math.max(0, walletKsh - Math.max(0, Math.round(paidKsh))));
+        setTotalEarningsKsh(walletKsh);
+      } catch (e) {
+        console.warn("Profile wallet commission fetch:", e);
+        const fallback = agent?.available_balance ?? cachedAgentData?.available_balance ?? 0;
+        setPaidFromLedgerKsh(0);
+        setBalance(fallback);
+        setTotalEarningsKsh(fallback);
       }
     } catch (error) {
       console.error("Error loading profile data:", error);
     } finally {
+      const permission = await getNotificationPermissionState();
+      setNotificationsGranted(permission === "granted");
       setIsLoading(false);
     }
   };
@@ -400,21 +471,45 @@ export default function ProfileScreen() {
   const name = agentData?.name || user?.email || "Agent";
   const email = agentData?.email || user?.email || "";
   const initial = getInitial(agentData?.name, user?.email);
+  const avatarSeed = getAgentAvatarSeed(
+    agentData?.name,
+    agentData?.email ?? user?.email,
+    user?.id
+  );
+  const avatarStyle = getDiceBearStyleForName(agentData?.name);
   const statusInfo = getStatusInfo(agentData?.status || "pending");
 
   return (
     <View style={styles.container}>
+      <NotificationEnablePrompt
+        visible={notificationPromptVisible}
+        agentId={user?.id}
+        onDismiss={() => setNotificationPromptVisible(false)}
+        onEnabled={() => {
+          setNotificationPromptVisible(false);
+          setNotificationsGranted(true);
+        }}
+      />
+      <AppRatingPrompt
+        visible={ratingPromptVisible}
+        onDismiss={() => setRatingPromptVisible(false)}
+        onRated={async (score) => {
+          await markAppRatingSubmitted(score);
+          if (user?.id) {
+            await submitAppRating(user.id, score);
+          }
+        }}
+        onPlayStoreOpened={async () => {
+          if (user?.id) {
+            await markAppRatingPlayStoreOpened(user.id);
+          }
+        }}
+        onComplete={() => setRatingPromptVisible(false)}
+      />
       {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => router.back()}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.backButtonIcon}>←</Text>
-        </TouchableOpacity>
+        <View style={styles.headerSide} />
         <Text style={styles.headerTitle}>Profile</Text>
-        {/* Online/Offline Status Indicator */}
         <View style={styles.headerRight}>
           <View style={[styles.statusIndicator, isOffline ? styles.statusIndicatorOffline : styles.statusIndicatorOnline]}>
             <View style={[styles.statusDot, isOffline ? styles.statusDotOffline : styles.statusDotOnline]} />
@@ -426,7 +521,10 @@ export default function ProfileScreen() {
       </View>
 
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingBottom: getWamTabBarOffset(insets.bottom) },
+        ]}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
@@ -441,9 +539,13 @@ export default function ProfileScreen() {
         {/* Profile Section */}
         <View style={styles.profileSection}>
           <View style={styles.avatarContainer}>
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>{initial}</Text>
-            </View>
+            <AgentAvatar
+              seed={avatarSeed}
+              style={avatarStyle}
+              size={scaleWidth(100)}
+              fallbackInitial={initial}
+              containerStyle={styles.avatar}
+            />
             <View
               style={[
                 styles.statusBadge,
@@ -484,9 +586,15 @@ export default function ProfileScreen() {
             </View>
             <View style={styles.statCard}>
               <Text style={styles.statValue}>
-                KSh {(agentData?.total_earnings || 0).toLocaleString()}
+                KSh {totalEarningsKsh.toLocaleString()}
               </Text>
               <Text style={styles.statLabel}>Total Earnings</Text>
+            </View>
+            <View style={styles.statCard}>
+              <Text style={styles.statValue}>
+                KSh {paidFromLedgerKsh.toLocaleString()}
+              </Text>
+              <Text style={styles.statLabel}>Paid to You</Text>
             </View>
             <View style={styles.statCard}>
               <Text style={styles.statValue}>{totalRegistered}</Text>
@@ -504,7 +612,7 @@ export default function ProfileScreen() {
           <Text style={styles.sectionTitle}>Contact Information</Text>
           <View style={styles.infoCard}>
             <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Airtel Phone</Text>
+              <Text style={styles.infoLabel}>Primary Phone</Text>
               <Text style={styles.infoValue}>
                 {agentData?.airtel_phone || "Not provided"}
               </Text>
@@ -553,6 +661,36 @@ export default function ProfileScreen() {
                 {formatDate(agentData?.created_at)}
               </Text>
             </View>
+            {agentData?.status === "approved" && !notificationsGranted ? (
+              <>
+                <View style={styles.infoDivider} />
+                <TouchableOpacity
+                  style={styles.infoRow}
+                  onPress={() => setNotificationPromptVisible(true)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.infoLabel}>Notifications</Text>
+                  <Text style={styles.notificationEnableLink}>
+                    Off — tap to enable
+                  </Text>
+                </TouchableOpacity>
+              </>
+            ) : null}
+            {agentData?.status === "approved" ? (
+              <>
+                <View style={styles.infoDivider} />
+                <TouchableOpacity
+                  style={styles.infoRow}
+                  onPress={() => setRatingPromptVisible(true)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.infoLabel}>Rate the app</Text>
+                  <Text style={styles.notificationEnableLink}>
+                    Tap to leave feedback
+                  </Text>
+                </TouchableOpacity>
+              </>
+            ) : null}
           </View>
         </View>
 
@@ -610,15 +748,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingBottom: 12,
   },
-  backButton: {
-    width: 40,
-    height: 40,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  backButtonIcon: {
-    fontSize: 24,
-    color: "#333333",
+  headerSide: {
+    width: 80,
   },
   headerTitle: {
     flex: 1,
@@ -671,7 +802,7 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingHorizontal: 16,
     paddingTop: 24,
-    paddingBottom: scaleHeight(100),
+    paddingBottom: scaleHeight(24),
   },
   profileSection: {
     alignItems: "center",
@@ -682,14 +813,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   avatar: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: "#0066CC",
-    justifyContent: "center",
-    alignItems: "center",
     borderWidth: 4,
-    borderColor: "#FFFFFF",
     shadowColor: "#000000",
     shadowOffset: {
       width: 0,
@@ -698,12 +822,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 8,
     elevation: 4,
-  },
-  avatarText: {
-    fontSize: 40,
-    fontFamily: "Poppins_700Bold",
-    color: "#FFFFFF",
-    letterSpacing: 0.5,
   },
   statusBadge: {
     position: "absolute",
@@ -830,6 +948,14 @@ const styles = StyleSheet.create({
     flex: 1,
     marginLeft: 16,
     letterSpacing: 0.2,
+  },
+  notificationEnableLink: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+    color: "#0066CC",
+    textAlign: "right",
+    flex: 1,
+    marginLeft: 16,
   },
   infoDivider: {
     height: 1,

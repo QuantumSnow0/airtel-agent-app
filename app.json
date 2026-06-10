@@ -2,19 +2,24 @@
   "expo": {
     "name": "WAM Apps",
     "slug": "wam-apps",
-    "version": "1.0.1",
+    "version": "1.0.4",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "wamapps",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "UIBackgroundModes": [
+          "remote-notification"
+        ]
+      }
     },
     "android": {
       "package": "com.wam.apps",
       "googleServicesFile": "./google-services.json",
-      "versionCode": 5,
+      "versionCode": 9,
       "statusBar": {
         "barStyle": "dark-content",
         "backgroundColor": "#FFFFFF"
@@ -28,7 +33,10 @@
       "predictiveBackGestureEnabled": false,
       "permissions": [
         "INTERNET",
-        "ACCESS_NETWORK_STATE"
+        "ACCESS_NETWORK_STATE",
+        "POST_NOTIFICATIONS",
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE"
       ],
       "intentFilters": [
         {
@@ -68,7 +76,8 @@
         "expo-notifications",
         {
           "icon": "./assets/images/android-icon-monochrome.png",
-          "color": "#FFFFFF",
+          "color": "#0066CC",
+          "defaultChannel": "default",
           "sounds": []
         }
       ]

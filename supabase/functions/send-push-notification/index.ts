@@ -89,7 +89,7 @@ serve(async (req) => {
     // Fetch active device tokens for this agent
     const { data: deviceTokens, error: tokensError } = await supabase
       .from("device_tokens")
-      .select("token")
+      .select("token, device_type")
       .eq("agent_id", notification.agent_id)
       .eq("is_active", true);
 
@@ -115,21 +115,33 @@ serve(async (req) => {
       );
     }
 
-    // Prepare push notification payload
-    const pushNotifications = deviceTokens.map((dt) => ({
-      to: dt.token,
-      sound: "default",
-      title: notification.title,
-      body: notification.message,
-      data: {
-        type: notification.type,
-        notificationId: notification.id,
-        relatedId: notification.related_id,
-        metadata: notification.metadata || {},
-      },
-      badge: 1, // Increment badge count
-      priority: "high",
-    }));
+    // Prepare push notification payload.
+    // Foreground banners use setNotificationHandler; background/killed needs OS-level display
+    // (Android channel + priority, iOS alert via title/body).
+    const pushNotifications = deviceTokens.map((dt) => {
+      const payload: Record<string, unknown> = {
+        to: dt.token,
+        sound: "default",
+        title: notification.title,
+        body: notification.message,
+        data: {
+          type: notification.type,
+          notificationId: notification.id,
+          relatedId: notification.related_id,
+          metadata: notification.metadata || {},
+        },
+        badge: 1,
+        priority: "high",
+      };
+
+      // channelId is Android-only; apply when not explicitly iOS (covers null legacy rows)
+      if (dt.device_type !== "ios") {
+        payload.channelId = "default";
+        payload.priority = "max";
+      }
+
+      return payload;
+    });
 
     console.log(`📱 Sending ${pushNotifications.length} push notification(s)`);
     console.log("📤 Push notification payload:", JSON.stringify(pushNotifications, null, 2));

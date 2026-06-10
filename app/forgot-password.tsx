@@ -90,17 +90,23 @@ export default function ForgotPasswordScreen() {
 
   const onSubmit = async (data: ForgotPasswordFormData) => {
     setIsLoading(true);
+    const redirectTo = "wamapps://reset-password";
+    console.log("[ForgotPassword] Requesting reset email:", { email: data.email, redirectTo });
 
     try {
       // Request password reset email from Supabase
       const { error } = await supabase.auth.resetPasswordForEmail(
         data.email,
-        {
-          redirectTo: "wamapps://reset-password",
-        }
+        { redirectTo }
       );
 
       if (error) {
+        console.error("[ForgotPassword] resetPasswordForEmail failed:", {
+          message: error.message,
+          name: error.name,
+          status: (error as any)?.status,
+          code: (error as any)?.code,
+        });
         if (error.message.includes("rate_limit") || error.message.includes("rate limit")) {
           Alert.alert(
             "Rate Limit",
@@ -110,6 +116,15 @@ export default function ForgotPasswordScreen() {
           // Don't reveal if email exists - security best practice
           // Show success message anyway to prevent email enumeration
           setEmailSent(true);
+        } else if (
+          (error as any)?.status === 500 ||
+          (error as any)?.code === "unexpected_failure" ||
+          error.message?.toLowerCase().includes("sending recovery email")
+        ) {
+          Alert.alert(
+            "Email Not Configured",
+            "Password reset emails are not set up on the server. Please contact support or try again later."
+          );
         } else {
           Alert.alert(
             "Error",
@@ -121,9 +136,14 @@ export default function ForgotPasswordScreen() {
       }
 
       // Success - show confirmation
+      console.log("[ForgotPassword] Reset email sent successfully to:", data.email);
       setEmailSent(true);
     } catch (err: any) {
-      console.error("Forgot password error:", err);
+      console.error("[ForgotPassword] Unexpected error:", {
+        message: err?.message,
+        name: err?.name,
+        stack: err?.stack,
+      });
       Alert.alert(
         "Error",
         err.message || "Failed to send password reset email. Please try again."

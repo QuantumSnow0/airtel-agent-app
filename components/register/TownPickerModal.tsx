@@ -17,6 +17,10 @@ interface TownPickerModalProps {
   selectedTown: string;
   onClose: () => void;
   onSelectTown: (town: string) => void;
+  /** When set, only these towns are shown (e.g. Home Fiber coverage). Defaults to all Kenyan towns. */
+  towns?: readonly string[];
+  modalTitle?: string;
+  modalSubtitle?: string;
 }
 
 export default function TownPickerModal({
@@ -24,6 +28,9 @@ export default function TownPickerModal({
   selectedTown,
   onClose,
   onSelectTown,
+  towns = KENYAN_TOWNS,
+  modalTitle = "Select town",
+  modalSubtitle = "Choose your location",
 }: TownPickerModalProps) {
   const [townSearchQuery, setTownSearchQuery] = useState("");
 
@@ -31,7 +38,7 @@ export default function TownPickerModal({
   const modalHeight = screenHeight * 0.85;
   const modalListHeight = modalHeight - 170;
 
-  const filteredTowns = KENYAN_TOWNS.filter((town) =>
+  const filteredTowns = towns.filter((town) =>
     town.toLowerCase().includes(townSearchQuery.toLowerCase())
   );
 
@@ -70,8 +77,8 @@ export default function TownPickerModal({
                 <Text style={modalStyles.modalIcon}>📍</Text>
               </View>
               <View>
-                <Text style={modalStyles.modalTitle}>Select Town</Text>
-                <Text style={modalStyles.modalSubtitle}>Choose your location</Text>
+                <Text style={modalStyles.modalTitle}>{modalTitle}</Text>
+                <Text style={modalStyles.modalSubtitle}>{modalSubtitle}</Text>
               </View>
             </View>
             <TouchableOpacity

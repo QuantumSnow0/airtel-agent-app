@@ -38,7 +38,7 @@ import {
  * NOTIFICATION TYPES EXPLANATION:
  * 
  * 1. REGISTRATION_STATUS_CHANGE
- *    - Triggered when: A customer registration status changes (pending → approved → installed)
+ *    - Triggered when: A customer registration status changes (installed or closed: rejected / duplicate / cancelled)
  *    - Logic: Database trigger or admin action updates status → System creates notification
  *    - Purpose: Agent knows their registration was processed
  *    - Action: Agent can view the registration details
@@ -66,6 +66,12 @@ import {
  *    - Logic: Admin creates announcement → System sends to all agents
  *    - Purpose: Important updates/information
  *    - Action: Agent reads announcement
+ *
+ * 6. PAYOUT_RECEIVED
+ *    - Triggered when: Admin records a payout in Payout Manager
+ *    - Logic: agent_payments insert → DB trigger creates notification
+ *    - Purpose: Agent knows money was sent
+ *    - Action: Agent can view profile / wallet
  */
 
 // Notification type definitions
@@ -74,7 +80,8 @@ type NotificationType =
   | "EARNINGS_UPDATE"
   | "ACCOUNT_STATUS_CHANGE"
   | "SYNC_FAILURE"
-  | "SYSTEM_ANNOUNCEMENT";
+  | "SYSTEM_ANNOUNCEMENT"
+  | "PAYOUT_RECEIVED";
 
 interface Notification {
   id: string;
@@ -88,8 +95,9 @@ interface Notification {
   metadata?: {
     // Type-specific data
     status?: string; // For status changes
-    amount?: number; // For earnings
+    amount?: number; // For earnings / payouts
     customerName?: string; // For registrations
+    reference?: string | null; // For payouts
   };
 }
 
@@ -268,39 +276,39 @@ export default function NotificationsScreen() {
         id: "1",
         type: "REGISTRATION_STATUS_CHANGE",
         title: "Installation Completed",
-        message: "Customer 'John Doe' installation has been completed. You earned KSh 300.",
+        message: "Customer 'John Doe' installation has been completed.",
         isRead: false,
         createdAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(), // 5 minutes ago
         relatedId: "reg-123",
         metadata: {
           status: "installed",
-          amount: 300,
           customerName: "John Doe",
+          carrier: "airtel",
         },
       },
       // Earnings Update
       {
         id: "2",
         type: "EARNINGS_UPDATE",
-        title: "New Earnings Added",
-        message: "KSh 300 has been added to your balance from a premium installation.",
+        title: "Earnings Updated",
+        message: "KSh 700 has been added to your balance from a premium installation.",
         isRead: false,
         createdAt: new Date(Date.now() - 15 * 60 * 1000).toISOString(), // 15 minutes ago
         metadata: {
-          amount: 300,
+          amount: 700,
         },
       },
-      // Registration Status Change - Approved
+      // Registration Status Change - Rejected
       {
         id: "3",
         type: "REGISTRATION_STATUS_CHANGE",
-        title: "Registration Approved",
-        message: "Customer 'Jane Smith' registration has been approved and is scheduled for installation.",
+        title: "Registration Rejected",
+        message: "Customer 'Jane Smith' registration was rejected and will not be installed.",
         isRead: true,
         createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), // 2 hours ago
         relatedId: "reg-456",
         metadata: {
-          status: "approved",
+          status: "rejected",
           customerName: "Jane Smith",
         },
       },
@@ -340,11 +348,11 @@ export default function NotificationsScreen() {
         id: "7",
         type: "EARNINGS_UPDATE",
         title: "New Earnings Added",
-        message: "KSh 150 has been added to your balance from a standard installation.",
+        message: "KSh 500 has been added to your balance from a standard installation.",
         isRead: true,
         createdAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(), // 7 days ago
         metadata: {
-          amount: 150,
+          amount: 500,
         },
       },
     ];
@@ -491,13 +499,29 @@ export default function NotificationsScreen() {
       case "SYSTEM_ANNOUNCEMENT":
         // No navigation needed
         break;
+      case "PAYOUT_RECEIVED":
+        router.push("/profile" as any);
+        break;
     }
   };
 
-  const getNotificationIcon = (type: NotificationType): string => {
-    switch (type) {
-      case "REGISTRATION_STATUS_CHANGE":
-        return "✅";
+  const getNotificationIcon = (notification: Notification): string => {
+    if (notification.type === "REGISTRATION_STATUS_CHANGE") {
+      switch (notification.metadata?.status) {
+        case "installed":
+          return "✅";
+        case "rejected":
+          return "❌";
+        case "duplicate":
+          return "📋";
+        case "cancelled":
+          return "🚫";
+        default:
+          return "📄";
+      }
+    }
+
+    switch (notification.type) {
       case "EARNINGS_UPDATE":
         return "💰";
       case "ACCOUNT_STATUS_CHANGE":
@@ -506,23 +530,40 @@ export default function NotificationsScreen() {
         return "⚠️";
       case "SYSTEM_ANNOUNCEMENT":
         return "📢";
+      case "PAYOUT_RECEIVED":
+        return "💸";
       default:
         return "🔔";
     }
   };
 
-  const getNotificationColor = (type: NotificationType): string => {
-    switch (type) {
-      case "REGISTRATION_STATUS_CHANGE":
-        return "#4CAF50"; // Green
+  const getNotificationColor = (notification: Notification): string => {
+    if (notification.type === "REGISTRATION_STATUS_CHANGE") {
+      switch (notification.metadata?.status) {
+        case "installed":
+          return "#4CAF50";
+        case "rejected":
+          return "#F44336";
+        case "duplicate":
+          return "#7B1FA2";
+        case "cancelled":
+          return "#616161";
+        default:
+          return "#FF9800";
+      }
+    }
+
+    switch (notification.type) {
       case "EARNINGS_UPDATE":
-        return "#FF9800"; // Orange
+        return "#FF9800";
       case "ACCOUNT_STATUS_CHANGE":
-        return "#2196F3"; // Blue
+        return "#2196F3";
       case "SYNC_FAILURE":
-        return "#F44336"; // Red
+        return "#F44336";
       case "SYSTEM_ANNOUNCEMENT":
-        return "#9C27B0"; // Purple
+        return "#9C27B0";
+      case "PAYOUT_RECEIVED":
+        return "#2E7D32";
       default:
         return "#666666";
     }
@@ -804,7 +845,7 @@ export default function NotificationsScreen() {
           </View>
         ) : (
           notifications.map((notification) => {
-            const iconColor = getNotificationColor(notification.type);
+            const iconColor = getNotificationColor(notification);
             const isUnread = !notification.isRead;
 
             return (
@@ -826,7 +867,7 @@ export default function NotificationsScreen() {
                     ]}
                   >
                     <Text style={styles.notificationIcon}>
-                      {getNotificationIcon(notification.type)}
+                      {getNotificationIcon(notification)}
                     </Text>
                   </View>
                   <View style={styles.notificationContent}>

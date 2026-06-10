@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS customer_registrations (
   ms_forms_submitted_at TIMESTAMPTZ, -- When successfully submitted to MS Forms
   
   -- Status Tracking
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'installed')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'installed', 'rejected', 'duplicate', 'cancelled')),
   
   -- Metadata
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -90,5 +90,5 @@ CREATE TRIGGER update_customer_registrations_updated_at
 COMMENT ON TABLE customer_registrations IS 'Stores customer registrations submitted by agents for Airtel SmartConnect services';
 COMMENT ON COLUMN customer_registrations.agent_id IS 'Foreign key to agents table - identifies which agent registered this customer';
 COMMENT ON COLUMN customer_registrations.ms_forms_response_id IS 'Response ID returned from Microsoft Forms API after successful submission';
-COMMENT ON COLUMN customer_registrations.status IS 'Registration status: pending (default), approved, or installed. Agent gets commission when status is installed.';
+COMMENT ON COLUMN customer_registrations.status IS 'pending = awaiting outcome; installed = commission; rejected/duplicate/cancelled = closed without install.';
 

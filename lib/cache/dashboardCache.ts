@@ -14,6 +14,10 @@ export interface CachedDashboardData {
   standardRegistered?: number;
   premiumInstalled?: number;
   standardInstalled?: number;
+  /** Safaricom customer_registrations-style counts (optional for older cache). */
+  safaricomRegistered?: number;
+  safaricomInstalled?: number;
+  safaricomInstalledCommissionKsh?: number;
   recentRegistrations: any[];
   timestamp: number;
 }

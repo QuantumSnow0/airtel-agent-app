@@ -42,7 +42,8 @@ ADD CONSTRAINT notifications_type_check CHECK (type IN (
   'EARNINGS_UPDATE',
   'ACCOUNT_STATUS_CHANGE',
   'SYNC_FAILURE',
-  'SYSTEM_ANNOUNCEMENT'
+  'SYSTEM_ANNOUNCEMENT',
+  'PAYOUT_RECEIVED'
 ));
 
 -- Create indexes for better query performance
@@ -86,7 +87,7 @@ CREATE POLICY "Service role can insert notifications"
 
 -- Comments for documentation
 COMMENT ON TABLE public.notifications IS 'Stores notifications for agents about status changes, earnings, and system announcements';
-COMMENT ON COLUMN public.notifications.type IS 'Type of notification: REGISTRATION_STATUS_CHANGE, EARNINGS_UPDATE, ACCOUNT_STATUS_CHANGE, SYNC_FAILURE, SYSTEM_ANNOUNCEMENT';
+COMMENT ON COLUMN public.notifications.type IS 'Type of notification: REGISTRATION_STATUS_CHANGE, EARNINGS_UPDATE, ACCOUNT_STATUS_CHANGE, SYNC_FAILURE, SYSTEM_ANNOUNCEMENT, PAYOUT_RECEIVED';
 COMMENT ON COLUMN public.notifications.related_id IS 'Optional reference to related entity (e.g., customer_registrations.id)';
 COMMENT ON COLUMN public.notifications.metadata IS 'JSON object storing type-specific data (status, amount, customerName, etc.)';
 

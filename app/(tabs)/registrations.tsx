@@ -24,29 +24,40 @@ import {
   Inter_600SemiBold,
 } from "@expo-google-fonts/inter";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { supabase } from "../lib/supabase";
+import { supabase } from "../../lib/supabase";
 import {
   scaleWidth,
   scaleHeight,
   scaleFont,
   getResponsivePadding,
   getCardPadding,
-} from "../lib/utils/responsive";
-import { getPendingRegistrations, initOfflineStorage } from "../lib/services/offlineStorage";
+} from "../../lib/utils/responsive";
+import { getPendingRegistrations, initOfflineStorage } from "../../lib/services/offlineStorage";
 import {
   getCachedRegistrations,
   saveRegistrationsToCache,
   clearRegistrationsCache,
   CachedRegistration,
-} from "../lib/cache/registrationsCache";
+} from "../../lib/cache/registrationsCache";
 import {
   syncRegistrationFromSupabase,
   syncAllUnsyncedRegistrations,
   syncPendingRegistrations,
   isOnline,
   setupAutoSync,
-} from "../lib/services/syncService";
-import { Toast } from "../components/Toast";
+} from "../../lib/services/syncService";
+import { Toast } from "../../components/Toast";
+import { getWamTabBarOffset } from "../../components/WamTabBar";
+import {
+  mapCustomerRowToUnifiedList,
+  mapSafaricomRowToUnifiedList,
+} from "../../lib/registrations/unifiedListRegistration";
+import {
+  REGISTRATION_FILTER_OPTIONS,
+  REGISTRATION_STATUS_COLORS,
+  formatRegistrationStatusLabel,
+  type RegistrationStatusFilter,
+} from "../../constants/registrationStatuses";
 
 interface Registration {
   id: string;
@@ -58,6 +69,8 @@ interface Registration {
   ms_forms_response_id?: string;
   ms_forms_submitted_at?: string;
   syncStatus?: "synced" | "pending" | "not_synced";
+  /** Defaults to Airtel when omitted (older cache). */
+  source?: "airtel" | "safaricom";
 }
 
 export default function RegistrationsScreen() {
@@ -67,7 +80,7 @@ export default function RegistrationsScreen() {
   const [allRegistrations, setAllRegistrations] = useState<Registration[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [filter, setFilter] = useState<"all" | "pending" | "approved" | "installed">("all");
+  const [filter, setFilter] = useState<RegistrationStatusFilter>("all");
   const [showFilterDropdown, setShowFilterDropdown] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [totalCount, setTotalCount] = useState(0);
@@ -103,7 +116,8 @@ export default function RegistrationsScreen() {
     const filtered = allRegistrations.filter((reg) => {
       const nameMatch = reg.customer_name?.toLowerCase().includes(queryLower);
       const locationMatch = reg.installation_town?.toLowerCase().includes(queryLower);
-      return nameMatch || locationMatch;
+      const pkgMatch = reg.preferred_package?.toLowerCase().includes(queryLower);
+      return nameMatch || locationMatch || pkgMatch;
     });
     setRegistrations(filtered);
   }, [searchQuery, allRegistrations]);
@@ -213,13 +227,16 @@ export default function RegistrationsScreen() {
           ms_forms_response_id: undefined,
           ms_forms_submitted_at: undefined,
           syncStatus: "pending" as const,
+          source: "airtel" as const,
         }));
 
         // Merge cached and pending registrations
         const pendingIds = new Set(pending.map((p: any) => p.id));
         const combined = [
           ...pendingRegistrations,
-          ...(cachedRegistrations || []).filter((reg) => !pendingIds.has(reg.id)),
+          ...(cachedRegistrations || [])
+            .map((reg) => ({ ...reg, source: reg.source ?? ("airtel" as const) }))
+            .filter((reg) => !pendingIds.has(reg.id)),
         ].sort((a, b) => {
           const dateA = new Date(a.created_at).getTime();
           const dateB = new Date(b.created_at).getTime();
@@ -240,32 +257,59 @@ export default function RegistrationsScreen() {
       // Online - Try to load cached data first (for fast initial display)
       const cachedRegistrations = await getCachedRegistrations();
       if (cachedRegistrations) {
-        // Apply filter to cached data
-        let filtered = cachedRegistrations;
+        const normalized = cachedRegistrations.map((reg) => ({
+          ...reg,
+          source: reg.source ?? ("airtel" as const),
+        }));
+        let filtered = normalized;
         if (filter !== "all") {
-          filtered = cachedRegistrations.filter((reg) => reg.status === filter);
+          filtered = normalized.filter((reg) => reg.status === filter);
         }
         setAllRegistrations(filtered as Registration[]);
         setTotalCount(filtered.length);
         setIsLoading(false); // Show cached data immediately
       }
 
-      // Build query - Only fetch non-sensitive data for privacy compliance
-      let query = supabase
+      // Airtel + Safaricom (same status filter)
+      let customerQuery = supabase
         .from("customer_registrations")
-        .select("id, customer_name, preferred_package, installation_town, status, created_at, ms_forms_response_id, ms_forms_submitted_at")
+        .select(
+          "id, customer_name, preferred_package, installation_town, status, created_at, ms_forms_response_id, ms_forms_submitted_at"
+        )
         .eq("agent_id", user.id)
         .order("created_at", { ascending: false });
 
-      // Apply filter
       if (filter !== "all") {
-        query = query.eq("status", filter);
+        customerQuery = customerQuery.eq("status", filter);
       }
 
-      const { data, error } = await query;
+      let safaricomQuery = supabase
+        .from("safaricom_registrations")
+        .select(
+          "id, customer_name, service_package, status, created_at, fiber_region_name, fiber_cluster_name, install_town, install_county"
+        )
+        .eq("agent_id", user.id)
+        .order("created_at", { ascending: false });
+
+      if (filter !== "all") {
+        safaricomQuery = safaricomQuery.eq("status", filter);
+      }
+
+      const [{ data, error }, safRes] = await Promise.all([
+        customerQuery,
+        safaricomQuery,
+      ]);
 
       if (error) {
         throw error;
+      }
+
+      const safData = safRes.error ? [] : safRes.data ?? [];
+      if (safRes.error) {
+        const m = String(safRes.error.message || "").toLowerCase();
+        if (!m.includes("does not exist")) {
+          console.warn("Safaricom registrations:", safRes.error);
+        }
       }
 
       // Check for pending offline registrations and merge them
@@ -283,9 +327,10 @@ export default function RegistrationsScreen() {
         ms_forms_response_id: undefined,
         ms_forms_submitted_at: undefined,
         syncStatus: "pending" as const,
+        source: "airtel" as const,
       }));
 
-      // Enhance registrations with sync status
+      // Enhance Airtel rows with sync status
       const enhancedRegistrations = (data || []).map((reg: any) => {
         const hasMSFormsId = !!reg.ms_forms_response_id;
         const hasMSFormsSubmittedAt = !!reg.ms_forms_submitted_at;
@@ -306,35 +351,44 @@ export default function RegistrationsScreen() {
           }
         }
 
-        return {
+        return mapCustomerRowToUnifiedList({
           ...reg,
           syncStatus,
-        };
+        });
       });
 
-      // Merge pending offline registrations with Supabase registrations
-      // Combine both arrays, ensuring pending ones are at the top (most recent)
+      const safUnified = safData.map((row: any) => mapSafaricomRowToUnifiedList(row));
+
       const allRegistrationsCombined = [
         ...pendingRegistrations,
-        ...enhancedRegistrations.filter((reg) => !pendingIds.has(reg.id)), // Exclude any that are already in pending
+        ...enhancedRegistrations.filter((reg) => !pendingIds.has(reg.id)),
+        ...safUnified,
       ].sort((a, b) => {
-        // Sort by created_at descending (most recent first)
         const dateA = new Date(a.created_at).getTime();
         const dateB = new Date(b.created_at).getTime();
         return dateB - dateA;
       });
 
-      // Save to cache (save all registrations, not filtered)
-      // First, get all registrations for cache
-      const allQuery = supabase
-        .from("customer_registrations")
-        .select("id, customer_name, preferred_package, installation_town, status, created_at, ms_forms_response_id, ms_forms_submitted_at")
-        .eq("agent_id", user.id)
-        .order("created_at", { ascending: false });
+      // Cache: full Airtel + full Safaricom (unfiltered), merged
+      const [{ data: allCustomer }, { data: allSaf }] = await Promise.all([
+        supabase
+          .from("customer_registrations")
+          .select(
+            "id, customer_name, preferred_package, installation_town, status, created_at, ms_forms_response_id, ms_forms_submitted_at"
+          )
+          .eq("agent_id", user.id)
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("safaricom_registrations")
+          .select(
+            "id, customer_name, service_package, status, created_at, fiber_region_name, fiber_cluster_name, install_town, install_county"
+          )
+          .eq("agent_id", user.id)
+          .order("created_at", { ascending: false }),
+      ]);
 
-      const { data: allData } = await allQuery;
-      if (allData) {
-        const allEnhanced = allData.map((reg: any) => {
+      if (allCustomer) {
+        const allEnhanced = allCustomer.map((reg: any) => {
           const hasMSFormsId = !!reg.ms_forms_response_id;
           const hasMSFormsSubmittedAt = !!reg.ms_forms_submitted_at;
           let syncStatus: "synced" | "pending" | "not_synced" = "not_synced";
@@ -350,12 +404,15 @@ export default function RegistrationsScreen() {
               syncStatus = "not_synced";
             }
           }
-          return { ...reg, syncStatus };
+          return mapCustomerRowToUnifiedList({ ...reg, syncStatus });
         });
-        // Merge pending registrations for cache too
+        const safForCache = (allSaf ?? []).map((row: any) =>
+          mapSafaricomRowToUnifiedList(row)
+        );
         const allDataWithPending = [
           ...pendingRegistrations,
           ...allEnhanced.filter((reg) => !pendingIds.has(reg.id)),
+          ...safForCache,
         ].sort((a, b) => {
           const dateA = new Date(a.created_at).getTime();
           const dateB = new Date(b.created_at).getTime();
@@ -375,9 +432,13 @@ export default function RegistrationsScreen() {
       // Try to load from cache on error
       const cachedRegistrations = await getCachedRegistrations();
       if (cachedRegistrations) {
-        let filtered = cachedRegistrations;
+        const normalized = cachedRegistrations.map((reg) => ({
+          ...reg,
+          source: reg.source ?? ("airtel" as const),
+        }));
+        let filtered = normalized;
         if (filter !== "all") {
-          filtered = cachedRegistrations.filter((reg) => reg.status === filter);
+          filtered = normalized.filter((reg) => reg.status === filter);
         }
         setAllRegistrations(filtered as Registration[]);
         setTotalCount(filtered.length);
@@ -403,6 +464,12 @@ export default function RegistrationsScreen() {
 
   const handleSyncRegistration = async (registrationId: string) => {
     if (syncingIds.has(registrationId)) return;
+
+    const targetReg = allRegistrations.find((r) => r.id === registrationId);
+    if (targetReg?.source === "safaricom") {
+      showToast("Safaricom registrations are already saved online.", "info");
+      return;
+    }
 
     const online = await isOnline();
     if (!online) {
@@ -451,7 +518,7 @@ export default function RegistrationsScreen() {
         // Registration is in offline storage - sync to BOTH Supabase and MS Forms
         console.log("🔄 Syncing offline registration to Supabase and MS Forms");
         // Use the offline sync which handles both Supabase and MS Forms
-        const { syncPendingRegistrations } = await import("../lib/services/syncService");
+        const { syncPendingRegistrations } = await import("../../lib/services/syncService");
         const syncResult = await syncPendingRegistrations(user.id, (current, total) => {
           showToast(`Syncing... ${current} of ${total}`, "info");
         });
@@ -571,31 +638,11 @@ export default function RegistrationsScreen() {
     }
   };
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "installed":
-        return "#4CAF50";
-      case "approved":
-        return "#2196F3";
-      case "pending":
-        return "#FF9800";
-      default:
-        return "#999999";
-    }
-  };
+  const getStatusColor = (status: string) =>
+    REGISTRATION_STATUS_COLORS[status]?.text ?? "#999999";
 
-  const getStatusBgColor = (status: string) => {
-    switch (status) {
-      case "installed":
-        return "#E8F5E9";
-      case "approved":
-        return "#E3F2FD";
-      case "pending":
-        return "#FFF4E6";
-      default:
-        return "#F5F5F5";
-    }
-  };
+  const getStatusBgColor = (status: string) =>
+    REGISTRATION_STATUS_COLORS[status]?.bg ?? "#F5F5F5";
 
   const getSyncStatusText = (syncStatus?: string) => {
     switch (syncStatus) {
@@ -631,15 +678,7 @@ export default function RegistrationsScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => router.back()}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.backButtonText}>← Back</Text>
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>All Registrations</Text>
-        <View style={styles.headerRight} />
+        <Text style={styles.headerTitle}>Registrations</Text>
       </View>
 
       {/* Search Bar and Filter */}
@@ -664,13 +703,7 @@ export default function RegistrationsScreen() {
             activeOpacity={0.7}
           >
             <Text style={styles.filterDropdownText}>
-              {filter === "all"
-                ? "All"
-                : filter === "pending"
-                ? "Pending"
-                : filter === "approved"
-                ? "Approved"
-                : "Installed"}
+              {REGISTRATION_FILTER_OPTIONS.find((o) => o.value === filter)?.label ?? "All"}
             </Text>
             <Text style={styles.filterDropdownArrow}>
               {showFilterDropdown ? "▲" : "▼"}
@@ -679,82 +712,28 @@ export default function RegistrationsScreen() {
 
           {showFilterDropdown && (
             <View style={styles.filterDropdownMenu}>
-              <TouchableOpacity
-                style={[
-                  styles.filterDropdownItem,
-                  filter === "all" && styles.filterDropdownItemActive,
-                ]}
-                onPress={() => {
-                  setFilter("all");
-                  setShowFilterDropdown(false);
-                }}
-              >
-                <Text
+              {REGISTRATION_FILTER_OPTIONS.map((option) => (
+                <TouchableOpacity
+                  key={option.value}
                   style={[
-                    styles.filterDropdownItemText,
-                    filter === "all" && styles.filterDropdownItemTextActive,
+                    styles.filterDropdownItem,
+                    filter === option.value && styles.filterDropdownItemActive,
                   ]}
+                  onPress={() => {
+                    setFilter(option.value);
+                    setShowFilterDropdown(false);
+                  }}
                 >
-                  All
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.filterDropdownItem,
-                  filter === "pending" && styles.filterDropdownItemActive,
-                ]}
-                onPress={() => {
-                  setFilter("pending");
-                  setShowFilterDropdown(false);
-                }}
-              >
-                <Text
-                  style={[
-                    styles.filterDropdownItemText,
-                    filter === "pending" && styles.filterDropdownItemTextActive,
-                  ]}
-                >
-                  Pending
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.filterDropdownItem,
-                  filter === "approved" && styles.filterDropdownItemActive,
-                ]}
-                onPress={() => {
-                  setFilter("approved");
-                  setShowFilterDropdown(false);
-                }}
-              >
-                <Text
-                  style={[
-                    styles.filterDropdownItemText,
-                    filter === "approved" && styles.filterDropdownItemTextActive,
-                  ]}
-                >
-                  Approved
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.filterDropdownItem,
-                  filter === "installed" && styles.filterDropdownItemActive,
-                ]}
-                onPress={() => {
-                  setFilter("installed");
-                  setShowFilterDropdown(false);
-                }}
-              >
-                <Text
-                  style={[
-                    styles.filterDropdownItemText,
-                    filter === "installed" && styles.filterDropdownItemTextActive,
-                  ]}
-                >
-                  Installed
-                </Text>
-              </TouchableOpacity>
+                  <Text
+                    style={[
+                      styles.filterDropdownItemText,
+                      filter === option.value && styles.filterDropdownItemTextActive,
+                    ]}
+                  >
+                    {option.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
             </View>
           )}
         </View>
@@ -791,7 +770,10 @@ export default function RegistrationsScreen() {
       {/* Registrations List */}
       <ScrollView
         style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingBottom: getWamTabBarOffset(insets.bottom) },
+        ]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
@@ -834,9 +816,16 @@ export default function RegistrationsScreen() {
                 >
                   <View style={styles.customerHeaderRow}>
                     <View style={styles.headerLeftSection}>
-                      <Text style={styles.registrationName}>
-                        {registration.customer_name || "Customer"}
-                      </Text>
+                      <View style={styles.nameRow}>
+                        <Text style={styles.registrationName}>
+                          {registration.customer_name || "Customer"}
+                        </Text>
+                        {(registration.source ?? "airtel") === "safaricom" && (
+                          <View style={styles.carrierChip}>
+                            <Text style={styles.carrierChipText}>Safaricom</Text>
+                          </View>
+                        )}
+                      </View>
                       {/* Sync Status - Always Visible */}
                       {registration.syncStatus && (
                         <View style={styles.syncStatusContainer}>
@@ -866,7 +855,7 @@ export default function RegistrationsScreen() {
                             { color: getStatusColor(registration.status) },
                           ]}
                         >
-                          {registration.status || "pending"}
+                          {formatRegistrationStatusLabel(registration.status || "pending")}
                         </Text>
                       </View>
                       <Text style={styles.expandIcon}>
@@ -886,10 +875,22 @@ export default function RegistrationsScreen() {
                         <View style={styles.detailRow}>
                           <Text style={styles.detailLabel}>Package:</Text>
                           <Text style={styles.detailValue}>
-                            {registration.preferred_package === "premium" ? "Premium" : "Standard"}
+                            {(registration.source ?? "airtel") === "safaricom"
+                              ? registration.preferred_package
+                              : registration.preferred_package === "premium"
+                                ? "Premium"
+                                : "Standard"}
                           </Text>
                         </View>
                       )}
+                      <View style={styles.detailRow}>
+                        <Text style={styles.detailLabel}>Network:</Text>
+                        <Text style={styles.detailValue}>
+                          {(registration.source ?? "airtel") === "safaricom"
+                            ? "Safaricom"
+                            : "Airtel"}
+                        </Text>
+                      </View>
 
                       {/* Location (Town only - no specific address) */}
                       {registration.installation_town && (
@@ -1191,6 +1192,26 @@ const styles = StyleSheet.create({
     flex: 1,
     marginRight: 8,
   },
+  nameRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 8,
+  },
+  carrierChip: {
+    backgroundColor: "rgba(0, 166, 81, 0.12)",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: "rgba(0, 166, 81, 0.35)",
+  },
+  carrierChipText: {
+    fontSize: 10,
+    fontFamily: "Inter_600SemiBold",
+    color: "#00A651",
+    letterSpacing: 0.2,
+  },
   headerRightSection: {
     flexDirection: "row",
     alignItems: "center",
@@ -1211,8 +1232,7 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontFamily: "Poppins_600SemiBold",
     color: "#333333",
-    flex: 1,
-    marginRight: 8,
+    flexShrink: 1,
   },
   registrationStatus: {
     paddingHorizontal: 10,

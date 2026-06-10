@@ -55,6 +55,11 @@ import {
 } from "../lib/services/offlineStorage";
 import { isOnline, syncPendingRegistrations } from "../lib/services/syncService";
 import { getCachedAgentData } from "../lib/cache/agentCache";
+import {
+  fetchCommissionRates,
+  getCachedCommissionRates,
+  type AirtelCommissionRates,
+} from "../lib/services/commissionRatesService";
 
 const STEPS = [
   { id: 1, title: "Customer Information" },
@@ -72,6 +77,9 @@ export default function RegisterCustomerScreen() {
   const [pendingCount, setPendingCount] = useState(0);
   const [isOffline, setIsOffline] = useState(false);
   const [showApprovalModal, setShowApprovalModal] = useState(false);
+  const [commissionRates, setCommissionRates] = useState<AirtelCommissionRates>(
+    getCachedCommissionRates
+  );
 
   const [fontsLoaded] = useFonts({
     Poppins_600SemiBold,
@@ -95,6 +103,7 @@ export default function RegisterCustomerScreen() {
       alternateNumber: "",
       email: "",
       preferredPackage: "premium",
+      unitsRequired: 1,
       installationTown: "",
       deliveryLandmark: "",
       installationLocation: "",
@@ -116,6 +125,7 @@ export default function RegisterCustomerScreen() {
     initOfflineStorage();
     checkOnlineStatus();
     loadPendingCount();
+    fetchCommissionRates().then(setCommissionRates);
     
     // Check online status periodically
     const interval = setInterval(() => {
@@ -251,6 +261,7 @@ export default function RegisterCustomerScreen() {
         "alternateNumber",
         "email",
         "preferredPackage",
+        "unitsRequired",
       ];
     } else if (currentStep === 2) {
       fieldsToValidate = [
@@ -289,6 +300,7 @@ export default function RegisterCustomerScreen() {
         alternateNumber: data.alternateNumber,
         email: data.email,
         preferredPackage: data.preferredPackage,
+        unitsRequired: data.unitsRequired,
         installationTown: data.installationTown,
         deliveryLandmark: data.deliveryLandmark,
         installationLocation: data.installationLocation,
@@ -320,6 +332,7 @@ export default function RegisterCustomerScreen() {
               alternate_number: data.alternateNumber,
               email: data.email,
               preferred_package: data.preferredPackage,
+              units_required: data.unitsRequired,
               installation_town: data.installationTown,
               delivery_landmark: data.deliveryLandmark,
               installation_location: data.installationLocation,
@@ -677,7 +690,13 @@ export default function RegisterCustomerScreen() {
         >
           {/* Form Content */}
           <View style={{ padding: 20 }}>
-            {currentStep === 1 && <CustomerInfoStep control={control} />}
+            {currentStep === 1 && (
+              <CustomerInfoStep
+                control={control}
+                standardCommissionKsh={commissionRates.standard}
+                premiumCommissionKsh={commissionRates.premium}
+              />
+            )}
             {currentStep === 2 && (
               <InstallationDetailsStep
                 control={control}

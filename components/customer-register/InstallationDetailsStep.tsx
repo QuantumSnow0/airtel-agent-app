@@ -3,7 +3,7 @@ import { Controller, Control } from "react-hook-form";
 import { CustomerRegistrationFormData } from "@/lib/validation/customerRegistrationSchemas";
 import { registerStyles } from "../register/styles";
 import { ALL_TOWNS, getInstallationLocationsForTown } from "@/constants/installationLocations";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 interface InstallationDetailsStepProps {
   control: Control<CustomerRegistrationFormData>;
@@ -19,10 +19,17 @@ export default function InstallationDetailsStep({
   const [showTownPicker, setShowTownPicker] = useState(false);
   const [showLocationPicker, setShowLocationPicker] = useState(false);
   const [customLocation, setCustomLocation] = useState("");
+  const [isUsingCustomLocation, setIsUsingCustomLocation] = useState(false);
 
   const installationLocations = selectedTown
     ? getInstallationLocationsForTown(selectedTown)
     : [];
+
+  // Reset custom-location mode when town changes.
+  useEffect(() => {
+    setIsUsingCustomLocation(false);
+    setCustomLocation("");
+  }, [selectedTown]);
 
   return (
     <View style={registerStyles.form}>
@@ -108,97 +115,102 @@ export default function InstallationDetailsStep({
           control={control}
           name="installationLocation"
           render={({ field: { onChange, value }, fieldState: { error } }) => {
-            const isCustomLocation = value && !installationLocations.includes(value);
-            const showCustomInput = isCustomLocation && selectedTown && installationLocations.length > 0;
+            const showCustomInput =
+              isUsingCustomLocation && selectedTown && installationLocations.length > 0;
             
             return (
               <>
                 {selectedTown && installationLocations.length > 0 ? (
                   <>
-                    <TouchableOpacity
-                      style={[
-                        registerStyles.input,
-                        error && registerStyles.inputError,
-                        { justifyContent: "center" },
-                      ]}
-                      onPress={() => setShowLocationPicker(true)}
-                    >
-                      <Text
-                        style={{
-                          color: value ? "#333333" : "#999999",
-                          fontFamily: "Inter_400Regular",
-                        }}
-                      >
-                        {value || "Select location"}
-                      </Text>
-                    </TouchableOpacity>
-                    {showLocationPicker && (
-                      <View
-                        style={{
-                          position: "absolute",
-                          top: 60,
-                          left: 0,
-                          right: 0,
-                          backgroundColor: "#FFFFFF",
-                          borderRadius: 8,
-                          borderWidth: 1,
-                          borderColor: "#E0E0E0",
-                          maxHeight: 300,
-                          zIndex: 1000,
-                          elevation: 5,
-                        }}
-                      >
-                        <ScrollView>
-                          {installationLocations.map((location) => (
-                            <TouchableOpacity
-                              key={location}
-                              style={{
-                                padding: 16,
-                                borderBottomWidth: 1,
-                                borderBottomColor: "#F0F0F0",
-                              }}
-                              onPress={() => {
-                                onChange(location);
-                                setShowLocationPicker(false);
-                                setCustomLocation("");
-                              }}
-                            >
-                              <Text
-                                style={{
-                                  fontFamily: "Inter_400Regular",
-                                  color: "#333333",
-                                }}
-                              >
-                                {location}
-                              </Text>
-                            </TouchableOpacity>
-                          ))}
-                          <TouchableOpacity
+                    {!showCustomInput ? (
+                      <>
+                        <TouchableOpacity
+                          style={[
+                            registerStyles.input,
+                            error && registerStyles.inputError,
+                            { justifyContent: "center" },
+                          ]}
+                          onPress={() => setShowLocationPicker(true)}
+                        >
+                          <Text
                             style={{
-                              padding: 16,
-                              borderBottomWidth: 1,
-                              borderBottomColor: "#F0F0F0",
-                              backgroundColor: "#F8F9FA",
-                            }}
-                            onPress={() => {
-                              setShowLocationPicker(false);
-                              setCustomLocation("");
-                              onChange("");
+                              color: value ? "#333333" : "#999999",
+                              fontFamily: "Inter_400Regular",
                             }}
                           >
-                            <Text
-                              style={{
-                                fontFamily: "Inter_500Medium",
-                                color: "#0066CC",
-                              }}
-                            >
-                              Other (Enter custom location)
-                            </Text>
-                          </TouchableOpacity>
-                        </ScrollView>
-                      </View>
-                    )}
-                    {showCustomInput && (
+                            {value || "Select location"}
+                          </Text>
+                        </TouchableOpacity>
+                        {showLocationPicker && (
+                          <View
+                            style={{
+                              position: "absolute",
+                              top: 60,
+                              left: 0,
+                              right: 0,
+                              backgroundColor: "#FFFFFF",
+                              borderRadius: 8,
+                              borderWidth: 1,
+                              borderColor: "#E0E0E0",
+                              maxHeight: 300,
+                              zIndex: 1000,
+                              elevation: 5,
+                            }}
+                          >
+                            <ScrollView>
+                              {installationLocations.map((location) => (
+                                <TouchableOpacity
+                                  key={location}
+                                  style={{
+                                    padding: 16,
+                                    borderBottomWidth: 1,
+                                    borderBottomColor: "#F0F0F0",
+                                  }}
+                                  onPress={() => {
+                                    onChange(location);
+                                    setShowLocationPicker(false);
+                                    setCustomLocation("");
+                                    setIsUsingCustomLocation(false);
+                                  }}
+                                >
+                                  <Text
+                                    style={{
+                                      fontFamily: "Inter_400Regular",
+                                      color: "#333333",
+                                    }}
+                                  >
+                                    {location}
+                                  </Text>
+                                </TouchableOpacity>
+                              ))}
+                              <TouchableOpacity
+                                style={{
+                                  padding: 16,
+                                  borderBottomWidth: 1,
+                                  borderBottomColor: "#F0F0F0",
+                                  backgroundColor: "#F8F9FA",
+                                }}
+                                onPress={() => {
+                                  setShowLocationPicker(false);
+                                  setCustomLocation("");
+                                  setIsUsingCustomLocation(true);
+                                  onChange("");
+                                }}
+                              >
+                                <Text
+                                  style={{
+                                    fontFamily: "Inter_500Medium",
+                                    color: "#0066CC",
+                                  }}
+                                >
+                                  Other (Enter custom location)
+                                </Text>
+                              </TouchableOpacity>
+                            </ScrollView>
+                          </View>
+                        )}
+                      </>
+                    ) : (
                       <TextInput
                         style={[
                           registerStyles.input,
@@ -214,6 +226,26 @@ export default function InstallationDetailsStep({
                         }}
                         autoCapitalize="words"
                       />
+                    )}
+                    {showCustomInput && (
+                      <TouchableOpacity
+                        onPress={() => {
+                          setIsUsingCustomLocation(false);
+                          setCustomLocation("");
+                          onChange("");
+                        }}
+                        activeOpacity={0.7}
+                        style={{ marginTop: 8, alignSelf: "flex-start" }}
+                      >
+                        <Text
+                          style={{
+                            fontFamily: "Inter_500Medium",
+                            color: "#0066CC",
+                          }}
+                        >
+                          Choose from list instead
+                        </Text>
+                      </TouchableOpacity>
                     )}
                   </>
                 ) : (

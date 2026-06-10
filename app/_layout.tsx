@@ -537,6 +537,11 @@ export default function RootLayout() {
             router.push("/notifications" as any);
           }
           break;
+        case "PAYOUT_RECEIVED":
+          if (currentRoute !== "profile") {
+            router.push("/profile" as any);
+          }
+          break;
         default:
           // Unknown type - go to dashboard instead of notifications to avoid confusion
           console.log("⚠️ Unknown notification type, navigating to dashboard");
@@ -585,6 +590,7 @@ export default function RootLayout() {
 
         if (accessToken && refreshToken) {
           // Establish session BEFORE navigating to reset-password screen
+          console.log("[ResetPassword _layout] Setting session with tokens (access_token present, refresh_token present)");
           const { data: sessionData, error: sessionError } =
             await supabase.auth.setSession({
               access_token: accessToken,
@@ -592,14 +598,30 @@ export default function RootLayout() {
             });
 
           if (sessionError) {
-            console.error("Error setting session in _layout:", sessionError);
+            console.error("[ResetPassword _layout] setSession failed:", {
+              message: sessionError.message,
+              name: sessionError.name,
+              status: (sessionError as any)?.status,
+              code: (sessionError as any)?.code,
+            });
             // Still navigate to reset-password - it will handle the error
           } else if (sessionData?.session) {
-            console.log("Password reset session established in _layout.tsx");
+            console.log("[ResetPassword _layout] Password reset session established successfully");
+          } else {
+            console.warn("[ResetPassword _layout] setSession returned no session:", { sessionData });
           }
         } else if (accessToken) {
           // Only access_token - try to establish session anyway
-          console.log("Warning: Only access_token found, no refresh_token");
+          console.warn("[ResetPassword _layout] Only access_token found, no refresh_token - session may fail. Tokens:", {
+            hasAccessToken: true,
+            hasRefreshToken: false,
+            recoveryType,
+          });
+        } else {
+          console.warn("[ResetPassword _layout] Missing tokens for reset - cannot set session:", {
+            hasAccessToken: !!accessToken,
+            hasRefreshToken: !!refreshToken,
+          });
         }
 
         // Navigate to reset-password screen

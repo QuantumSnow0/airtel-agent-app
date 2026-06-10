@@ -23,12 +23,19 @@ import {
   generateUUID,
   getPackageName,
   normalizeTownForMSForms,
+  normalizeUnitsRequired,
 } from "../utils/customerRegistration";
 
 // Microsoft Forms Configuration
-const MS_FORMS_FORM_ID =
-  process.env.EXPO_PUBLIC_MS_FORMS_FORM_ID ||
+const MS_FORMS_FORM_ID_OLD =
   "JzfHFpyXgk2zp-tqL93-V1fdJne7SIlMnh7yZpkW8f5UNE5JMkcyMEtYSDhZUEdZUVoyUDZBSlA1Wi4u";
+const MS_FORMS_FORM_ID_NEW =
+  "JzfHFpyXgk2zp-tqL93-V1fdJne7SIlMnh7yZpkW8f5UM0syWjU3MVVKMTczNkRPN0xQRkFEWloxTS4u";
+const MS_FORMS_FORM_ID = (() => {
+  const raw = process.env.EXPO_PUBLIC_MS_FORMS_FORM_ID?.split("#")[0]?.trim();
+  const envVal = raw || MS_FORMS_FORM_ID_NEW;
+  return envVal === MS_FORMS_FORM_ID_OLD ? MS_FORMS_FORM_ID_NEW : envVal;
+})();
 const MS_FORMS_TENANT_ID =
   process.env.EXPO_PUBLIC_MS_FORMS_TENANT_ID ||
   "16c73727-979c-4d82-b3a7-eb6a2fddfe57";
@@ -46,7 +53,7 @@ function getMSFormsResponsePageUrl(): string {
   return `https://forms.office.com/pages/responsepage.aspx?id=${MS_FORMS_FORM_ID}&route=shorturl`;
 }
 
-// Question IDs for Microsoft Forms
+// Question IDs for Microsoft Forms (shared fields)
 const QUESTION_IDS = {
   agentType: "r0feee2e2bc7c44fb9af400709e7e6276",
   enterpriseCP: "r52e9f6e788444e2a96d9e30de5d635d8",
@@ -64,8 +71,25 @@ const QUESTION_IDS = {
   deliveryLandmark: "r7a69684d43ec4bf1b6971b21a8b4dd18",
   visitDate: "r68b858271107400189b8d681d1b19c38",
   visitTime: "rae98a58cb06949c1a3222443368aa64e",
-  installationLocation: "r55f328ec020a4a629f58639cd56ecd85",
+  installationLocation: "r99215bf0748f4e949b127b4a344e44ec",
   optionalField: "r1e3b5a91acaa465b8aab76bab2cad94a",
+};
+
+const TOWN_TO_LOCATION_QUESTION_ID: Record<string, string> = {
+  BUNGOMA: "rbf5746ac7f5e4d2cab54a1b8df24b5e1",
+  ELDORET: "r24b818b049314910ad025b6b727e64a3",
+  GARISSA: "r2fc4cb930c154b5e8f1a354d4ac354a5",
+  KAKAMEGA: "r28f2b48873504822b4010ba668be5267",
+  KILIFI: "rafb9a2cdb406426fa865a66baa42b3a0",
+  KISII: "r77cbe5ec85a8411ca451f323c9336c7e",
+  KISUMU: "r39626af0978948d780a63643b5a14ef7",
+  KITALE: "rcae794cab7ff49bbacecf526f6c7f4ff",
+  MACHAKOS: "re7e1cac4a9424be9a965efd0e7065812",
+  MERU: "rd95772902dc54356bce0f3d11204586a",
+  MIGORI: "r3a023823fcfe46798b4b8af5051dc632",
+  MOMBASA: "r6c5bd7f72fde4c51b2ac8661f3d3afac",
+  NAIROBI: "r99215bf0748f4e949b127b4a344e44ec",
+  NAKURU: "r37c5c841668f44269a3410c03e9eb055",
 };
 
 export interface MSTokens {
@@ -83,6 +107,7 @@ export interface CustomerRegistrationData {
   alternateNumber: string;
   email: string;
   preferredPackage: "standard" | "premium";
+  unitsRequired?: number;
   installationTown: string;
   deliveryLandmark: string;
   installationLocation: string;
@@ -470,6 +495,7 @@ export function buildMSFormsPayload(
   const formattedAgentMobile = formatPhone(agentData.mobile);
 
   const fullPackageName = getPackageName(customerData.preferredPackage);
+  const unitsRequired = normalizeUnitsRequired(customerData.unitsRequired);
   const time24Hour = convertTo24Hour(customerData.visitTime);
 
   // ⚠️ CRITICAL: Convert visitDate from M/d/yyyy (React Native format) to YYYY-MM-DD (Microsoft Forms format)
@@ -499,8 +525,11 @@ export function buildMSFormsPayload(
     agentMobile: formattedAgentMobile,
     leadType: "Confirmed",
     connectionType: "SmartConnect (5G ODU)",
-    totalUnitsRequired: "1",
+    totalUnitsRequired: String(unitsRequired),
   };
+
+  const installationLocationQuestionId =
+    TOWN_TO_LOCATION_QUESTION_ID[normalizedTown] ?? QUESTION_IDS.installationLocation;
 
   // Build answers array - ORDER IS CRITICAL
   const answers = [
@@ -525,12 +554,12 @@ export function buildMSFormsPayload(
       answer1: internalDefaults.leadType,
     },
     {
-      questionId: QUESTION_IDS.totalUnitsRequired,
-      answer1: internalDefaults.totalUnitsRequired,
-    },
-    {
       questionId: QUESTION_IDS.connectionType,
       answer1: internalDefaults.connectionType,
+    },
+    {
+      questionId: QUESTION_IDS.totalUnitsRequired,
+      answer1: internalDefaults.totalUnitsRequired,
     },
     {
       questionId: QUESTION_IDS.customerName,
@@ -569,8 +598,12 @@ export function buildMSFormsPayload(
       answer1: normalizedTown, // e.g., "HOMABAY" not "Homa Bay"
     },
     {
-      questionId: QUESTION_IDS.installationLocation,
+      questionId: installationLocationQuestionId,
       answer1: installationLocation, // e.g., "HOMABAY - Kangemi"
+    },
+    {
+      questionId: QUESTION_IDS.optionalField,
+      answer1: null,
     },
   ];
 
