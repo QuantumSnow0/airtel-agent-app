@@ -479,14 +479,20 @@ export default function NotificationsScreen() {
     // Note: Notifications are automatically marked as read when viewed, no need to mark on click
     switch (notification.type) {
       case "REGISTRATION_STATUS_CHANGE":
-        // Navigate to registration details
         if (notification.relatedId) {
-          router.push(`/registrations` as any);
+          const carrier =
+            notification.metadata?.carrier === "safaricom"
+              ? "safaricom"
+              : "airtel";
+          router.push(
+            `/registration/${notification.relatedId}?source=${carrier}` as any
+          );
+        } else {
+          router.push("/registrations" as any);
         }
         break;
       case "EARNINGS_UPDATE":
-        // Navigate to dashboard (balance section)
-        router.push("/dashboard" as any);
+        router.push("/earnings-history" as any);
         break;
       case "ACCOUNT_STATUS_CHANGE":
         // Navigate to profile/account settings
@@ -500,7 +506,7 @@ export default function NotificationsScreen() {
         // No navigation needed
         break;
       case "PAYOUT_RECEIVED":
-        router.push("/profile" as any);
+        router.push("/earnings-history" as any);
         break;
     }
   };

@@ -4,11 +4,12 @@ import { useEffect, useState, useRef } from "react";
 import { ActivityIndicator, StatusBar, StyleSheet, View } from "react-native";
 import { checkAppVersion } from "../lib/services/appVersionService";
 import {
-  getDeviceToken,
+  activateAgentNotifications,
+  ensureAndroidNotificationChannel,
+  ensureNotificationListeners,
   getLastNotificationResponse,
-  registerDeviceToken,
   requestNotificationPermissions,
-  setupNotificationListeners,
+  unsubscribeFromNotificationAlerts,
 } from "../lib/services/pushNotificationService";
 import { supabase } from "../lib/supabase";
 
@@ -208,12 +209,13 @@ export default function RootLayout() {
 
       if (event === "SIGNED_OUT") {
         console.log("User signed out - redirecting to login");
+        unsubscribeFromNotificationAlerts();
         // Navigate immediately - router.replace will handle duplicate prevention
         router.replace("/login" as any);
       } else if (event === "SIGNED_IN") {
-        // User just logged in - setup push notifications
-        // Only setup on SIGNED_IN, not on TOKEN_REFRESHED (which fires too frequently)
-        // Only call if not already set up and not currently setting up
+        if (session?.user) {
+          void activateAgentNotifications(session.user.id);
+        }
         if (!pushNotificationsSetupRef.current && !isSettingUpPushNotifications.current) {
           console.log("User signed in - setting up push notifications");
           pushNotificationsSetupRef.current = true;
@@ -398,90 +400,49 @@ export default function RootLayout() {
     try {
       console.log("🔔 Starting push notification setup...");
       console.log("📋 Current time:", new Date().toISOString());
-      
-      // Request notification permissions
-      console.log("🔐 Requesting notification permissions...");
+
+      await ensureAndroidNotificationChannel();
+      ensureNotificationListeners((response) => {
+        console.log("👆 Notification tapped:", response);
+        handleNotificationTap(response);
+      });
+
       const hasPermission = await requestNotificationPermissions();
       if (!hasPermission) {
-        console.log("⚠️ Notification permissions not granted");
+        console.log("⚠️ Notification permissions not granted — in-app list still works");
         return;
       }
       console.log("✅ Notification permissions granted");
 
-      // Get device token
-      const token = await getDeviceToken();
-      if (!token) {
-        console.log("⚠️ Could not get device token");
-        return;
-      }
-
-      console.log("📱 Device token obtained:", token.substring(0, 50) + "...");
-
-      // Get current user (if logged in)
       const {
         data: { user },
         error: userError,
       } = await supabase.auth.getUser();
 
-      // If user is logged in, register token in database
       if (!userError && user) {
         console.log("👤 User found:", user.id);
-        // Register token in database
-        const result = await registerDeviceToken(user.id, token);
-        if (result.success) {
-          console.log("✅ Device token registered successfully");
-        } else {
-          console.error("❌ Failed to register device token:", result.error);
-        }
+        await activateAgentNotifications(user.id);
       } else {
-        // No user logged in yet - this is normal on app startup
-        // Token will be registered when user logs in (handled by SIGNED_IN event)
-        console.log("⚠️ No user logged in, token will be registered on login");
+        console.log("⚠️ No user logged in — alerts will subscribe after login");
       }
 
-      // Setup notification listeners
-      const cleanup = setupNotificationListeners(
-        // Foreground notification handler
-        (notification) => {
-          console.log("📬 Foreground notification:", notification);
-          // Notification is automatically shown by expo-notifications
-          // You can add custom handling here if needed
-        },
-        // Notification tap handler
-        (response) => {
-          console.log("👆 Notification tapped:", response);
-          handleNotificationTap(response);
-        }
-      );
-
-      // Check if app was opened from a notification
-      // Only handle if app was actually opened from notification (not on every startup)
-      // This prevents redirecting to notifications on normal app startup
-      // IMPORTANT: Only check this once on initial mount, not on every app reopen
       const lastResponse = await getLastNotificationResponse();
       if (lastResponse) {
-        // Check if notification was tapped very recently (within last 1 second)
-        // This ensures we only navigate if user actually tapped a notification just now
-        // Stale notifications from previous app sessions will be ignored
         const notificationTime = lastResponse.notification.date || 0;
         const now = Date.now();
         const timeSinceNotification = now - notificationTime;
-        
-        // Only navigate if notification was tapped very recently (within 1 second)
-        // This prevents navigating on app reopen from old notifications
+
         if (timeSinceNotification < 1000) {
           console.log("📱 App opened from notification tap (very recent)");
-          // Small delay to ensure router is ready
           setTimeout(() => {
             handleNotificationTap(lastResponse);
           }, 300);
         } else {
-          console.log(`📱 Notification response found but too old (${Math.round(timeSinceNotification / 1000)}s ago), ignoring`);
+          console.log(
+            `📱 Notification response found but too old (${Math.round(timeSinceNotification / 1000)}s ago), ignoring`
+          );
         }
       }
-
-      // Cleanup on unmount
-      return cleanup;
     } catch (error) {
       console.error("Error setting up push notifications:", error);
     }
@@ -511,16 +472,20 @@ export default function RootLayout() {
     if (data?.type) {
       switch (data.type) {
         case "REGISTRATION_STATUS_CHANGE":
-          if (data.relatedId && currentRoute !== "registrations") {
+          if (data.relatedId) {
+            const carrier =
+              data.carrier === "safaricom" || data.metadata?.carrier === "safaricom"
+                ? "safaricom"
+                : "airtel";
+            router.push(
+              `/registration/${data.relatedId}?source=${carrier}` as any
+            );
+          } else if (currentRoute !== "registrations") {
             router.push("/registrations" as any);
-          } else if (!data.relatedId && currentRoute !== "dashboard") {
-            router.push("/dashboard" as any);
           }
           break;
         case "EARNINGS_UPDATE":
-          if (currentRoute !== "dashboard") {
-            router.push("/dashboard" as any);
-          }
+          router.push("/earnings-history" as any);
           break;
         case "ACCOUNT_STATUS_CHANGE":
           if (currentRoute !== "dashboard") {
@@ -538,9 +503,7 @@ export default function RootLayout() {
           }
           break;
         case "PAYOUT_RECEIVED":
-          if (currentRoute !== "profile") {
-            router.push("/profile" as any);
-          }
+          router.push("/earnings-history" as any);
           break;
         default:
           // Unknown type - go to dashboard instead of notifications to avoid confusion

@@ -14,7 +14,6 @@ import {
   enableNotificationsForAgent,
   getNotificationPermissionState,
   getNotificationSettingsInstructions,
-  isExpoGo,
   type NotificationPermissionState,
 } from "../lib/services/pushNotificationService";
 import {
@@ -128,18 +127,8 @@ export function NotificationEnablePrompt({
             <View style={styles.grantedBox}>
               <Text style={styles.grantedTitle}>Already allowed</Text>
               <Text style={styles.grantedText}>
-                This device has already granted notification permission.
-                {isExpoGo()
-                  ? " Expo Go can show in-app alerts. Lock-screen push when the app is closed needs the installed WAM Apps APK, not Expo Go."
-                  : " You should receive payment and status alerts."}
-              </Text>
-            </View>
-          ) : isExpoGo() ? (
-            <View style={styles.expoGoBox}>
-              <Text style={styles.expoGoText}>
-                On Expo Go, tap below to allow notifications (first time) or open
-                Expo Go settings. Background push needs the installed WAM Apps
-                build, not Expo Go.
+                This device has already granted notification permission. You
+                should receive payment, status, and payout alerts.
               </Text>
             </View>
           ) : null}

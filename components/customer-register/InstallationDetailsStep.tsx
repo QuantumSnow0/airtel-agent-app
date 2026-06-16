@@ -1,8 +1,18 @@
-import { View, Text, TextInput, TouchableOpacity, ScrollView } from "react-native";
-import { Controller, Control } from "react-hook-form";
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  Modal,
+  Pressable,
+  FlatList,
+  Dimensions,
+} from "react-native";
+import { Controller, Control, useWatch } from "react-hook-form";
 import { CustomerRegistrationFormData } from "@/lib/validation/customerRegistrationSchemas";
-import { registerStyles } from "../register/styles";
+import { registerStyles, modalStyles } from "../register/styles";
 import { ALL_TOWNS, getInstallationLocationsForTown } from "@/constants/installationLocations";
+import TownPickerModal from "../register/TownPickerModal";
 import { useEffect, useState } from "react";
 
 interface InstallationDetailsStepProps {
@@ -21,15 +31,20 @@ export default function InstallationDetailsStep({
   const [customLocation, setCustomLocation] = useState("");
   const [isUsingCustomLocation, setIsUsingCustomLocation] = useState(false);
 
-  const installationLocations = selectedTown
-    ? getInstallationLocationsForTown(selectedTown)
+  const installationTown =
+    useWatch({ control, name: "installationTown" }) || selectedTown || "";
+  const installationLocations = installationTown
+    ? getInstallationLocationsForTown(installationTown)
     : [];
 
-  // Reset custom-location mode when town changes.
+  const { height: screenHeight } = Dimensions.get("window");
+  const locationModalHeight = screenHeight * 0.75;
+  const locationListHeight = locationModalHeight - 100;
+
   useEffect(() => {
     setIsUsingCustomLocation(false);
     setCustomLocation("");
-  }, [selectedTown]);
+  }, [installationTown]);
 
   return (
     <View style={registerStyles.form}>
@@ -52,57 +67,25 @@ export default function InstallationDetailsStep({
                 <Text
                   style={{
                     color: value ? "#333333" : "#999999",
-                    fontFamily: value ? "Inter_400Regular" : "Inter_400Regular",
+                    fontFamily: "Inter_400Regular",
                   }}
                 >
                   {value || "Select town"}
                 </Text>
               </TouchableOpacity>
               {error && <Text style={registerStyles.errorText}>{error.message}</Text>}
-              {showTownPicker && (
-                <View
-                  style={{
-                    position: "absolute",
-                    top: 60,
-                    left: 0,
-                    right: 0,
-                    backgroundColor: "#FFFFFF",
-                    borderRadius: 8,
-                    borderWidth: 1,
-                    borderColor: "#E0E0E0",
-                    maxHeight: 300,
-                    zIndex: 1000,
-                    elevation: 5,
-                  }}
-                >
-                  <ScrollView>
-                    {ALL_TOWNS.map((town) => (
-                      <TouchableOpacity
-                        key={town}
-                        style={{
-                          padding: 16,
-                          borderBottomWidth: 1,
-                          borderBottomColor: "#F0F0F0",
-                        }}
-                        onPress={() => {
-                          onChange(town);
-                          onTownChange(town);
-                          setShowTownPicker(false);
-                        }}
-                      >
-                        <Text
-                          style={{
-                            fontFamily: "Inter_400Regular",
-                            color: "#333333",
-                          }}
-                        >
-                          {town}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
-                </View>
-              )}
+              <TownPickerModal
+                visible={showTownPicker}
+                selectedTown={value || ""}
+                onClose={() => setShowTownPicker(false)}
+                onSelectTown={(town) => {
+                  onChange(town);
+                  onTownChange(town);
+                }}
+                towns={ALL_TOWNS}
+                modalTitle="Select installation town"
+                modalSubtitle="Choose the town for customer installation"
+              />
             </>
           )}
         />
@@ -116,11 +99,13 @@ export default function InstallationDetailsStep({
           name="installationLocation"
           render={({ field: { onChange, value }, fieldState: { error } }) => {
             const showCustomInput =
-              isUsingCustomLocation && selectedTown && installationLocations.length > 0;
-            
+              isUsingCustomLocation &&
+              installationTown &&
+              installationLocations.length > 0;
+
             return (
               <>
-                {selectedTown && installationLocations.length > 0 ? (
+                {installationTown && installationLocations.length > 0 ? (
                   <>
                     {!showCustomInput ? (
                       <>
@@ -141,74 +126,120 @@ export default function InstallationDetailsStep({
                             {value || "Select location"}
                           </Text>
                         </TouchableOpacity>
-                        {showLocationPicker && (
-                          <View
-                            style={{
-                              position: "absolute",
-                              top: 60,
-                              left: 0,
-                              right: 0,
-                              backgroundColor: "#FFFFFF",
-                              borderRadius: 8,
-                              borderWidth: 1,
-                              borderColor: "#E0E0E0",
-                              maxHeight: 300,
-                              zIndex: 1000,
-                              elevation: 5,
-                            }}
+                        <Modal
+                          visible={showLocationPicker}
+                          transparent
+                          animationType="slide"
+                          onRequestClose={() => setShowLocationPicker(false)}
+                        >
+                          <Pressable
+                            style={modalStyles.modalOverlay}
+                            onPress={() => setShowLocationPicker(false)}
                           >
-                            <ScrollView>
-                              {installationLocations.map((location) => (
-                                <TouchableOpacity
-                                  key={location}
-                                  style={{
-                                    padding: 16,
-                                    borderBottomWidth: 1,
-                                    borderBottomColor: "#F0F0F0",
-                                  }}
-                                  onPress={() => {
-                                    onChange(location);
-                                    setShowLocationPicker(false);
-                                    setCustomLocation("");
-                                    setIsUsingCustomLocation(false);
-                                  }}
-                                >
-                                  <Text
-                                    style={{
-                                      fontFamily: "Inter_400Regular",
-                                      color: "#333333",
-                                    }}
-                                  >
-                                    {location}
-                                  </Text>
-                                </TouchableOpacity>
-                              ))}
-                              <TouchableOpacity
-                                style={{
-                                  padding: 16,
-                                  borderBottomWidth: 1,
-                                  borderBottomColor: "#F0F0F0",
-                                  backgroundColor: "#F8F9FA",
-                                }}
-                                onPress={() => {
-                                  setShowLocationPicker(false);
-                                  setCustomLocation("");
-                                  setIsUsingCustomLocation(true);
-                                  onChange("");
-                                }}
+                              <View
+                                style={[
+                                  modalStyles.modalContent,
+                                  { height: locationModalHeight },
+                                ]}
+                                onStartShouldSetResponder={() => true}
                               >
-                                <Text
-                                  style={{
-                                    fontFamily: "Inter_500Medium",
-                                    color: "#0066CC",
-                                  }}
+                              <View style={modalStyles.modalHeader}>
+                                <View style={modalStyles.modalHeaderLeft}>
+                                  <View>
+                                    <Text style={modalStyles.modalTitle}>
+                                      Select installation location
+                                    </Text>
+                                    <Text style={modalStyles.modalSubtitle}>
+                                      {installationTown}
+                                    </Text>
+                                  </View>
+                                </View>
+                                <TouchableOpacity
+                                  onPress={() => setShowLocationPicker(false)}
+                                  style={modalStyles.modalCloseButton}
+                                  activeOpacity={0.7}
                                 >
-                                  Other (Enter custom location)
-                                </Text>
-                              </TouchableOpacity>
-                            </ScrollView>
-                          </View>
-                        )}
+                                  <View style={modalStyles.modalCloseButtonInner}>
+                                    <Text style={modalStyles.modalCloseText}>✕</Text>
+                                  </View>
+                                </TouchableOpacity>
+                              </View>
+                              <View
+                                style={[
+                                  modalStyles.modalListContainer,
+                                  { height: locationListHeight },
+                                ]}
+                              >
+                              <FlatList
+                                data={installationLocations}
+                                keyExtractor={(item) => item}
+                                nestedScrollEnabled
+                                keyboardShouldPersistTaps="handled"
+                                showsVerticalScrollIndicator
+                                contentContainerStyle={modalStyles.modalListContent}
+                                renderItem={({ item }) => {
+                                  const isSelected = value === item;
+                                  return (
+                                    <TouchableOpacity
+                                      style={[
+                                        modalStyles.modalItem,
+                                        isSelected && modalStyles.modalItemSelected,
+                                      ]}
+                                      onPress={() => {
+                                        onChange(item);
+                                        setShowLocationPicker(false);
+                                        setCustomLocation("");
+                                        setIsUsingCustomLocation(false);
+                                      }}
+                                      activeOpacity={0.7}
+                                    >
+                                      <Text
+                                        style={[
+                                          modalStyles.modalItemText,
+                                          isSelected && modalStyles.modalItemTextSelected,
+                                        ]}
+                                      >
+                                        {item}
+                                      </Text>
+                                      {isSelected ? (
+                                        <View style={modalStyles.modalItemCheck}>
+                                          <Text style={modalStyles.modalItemCheckText}>
+                                            ✓
+                                          </Text>
+                                        </View>
+                                      ) : null}
+                                    </TouchableOpacity>
+                                  );
+                                }}
+                                ListFooterComponent={
+                                  <TouchableOpacity
+                                    style={[
+                                      modalStyles.modalItem,
+                                      { backgroundColor: "#F8F9FA" },
+                                    ]}
+                                    onPress={() => {
+                                      setShowLocationPicker(false);
+                                      setCustomLocation("");
+                                      setIsUsingCustomLocation(true);
+                                      onChange("");
+                                    }}
+                                    activeOpacity={0.7}
+                                  >
+                                    <Text
+                                      style={{
+                                        fontFamily: "Inter_500Medium",
+                                        color: "#0066CC",
+                                      }}
+                                    >
+                                      Other (Enter custom location)
+                                    </Text>
+                                  </TouchableOpacity>
+                                }
+                              />
+                              </View>
+                              </View>
+                          </Pressable>
+                        </Modal>
                       </>
                     ) : (
                       <TextInput
@@ -292,4 +323,3 @@ export default function InstallationDetailsStep({
     </View>
   );
 }
-

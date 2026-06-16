@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   View,
   Text,
@@ -40,7 +40,6 @@ import {
   CachedRegistration,
 } from "../../lib/cache/registrationsCache";
 import {
-  syncRegistrationFromSupabase,
   syncAllUnsyncedRegistrations,
   syncPendingRegistrations,
   isOnline,
@@ -81,12 +80,13 @@ export default function RegistrationsScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<RegistrationStatusFilter>("all");
+  const [carrierFilter, setCarrierFilter] = useState<"all" | "airtel" | "safaricom">("all");
+  const [sortBy, setSortBy] = useState<"newest" | "oldest" | "name">("newest");
   const [showFilterDropdown, setShowFilterDropdown] = useState(false);
+  const [showSortDropdown, setShowSortDropdown] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [totalCount, setTotalCount] = useState(0);
-  const [syncingIds, setSyncingIds] = useState<Set<string>>(new Set());
   const [syncingAll, setSyncingAll] = useState(false);
-  const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
   const [toastVisible, setToastVisible] = useState(false);
   const [toastMessage, setToastMessage] = useState("");
   const [toastType, setToastType] = useState<"info" | "success" | "error">("info");
@@ -103,24 +103,52 @@ export default function RegistrationsScreen() {
     loadRegistrations();
   }, [filter]);
 
-  // Filter registrations by search query in real-time
-  useEffect(() => {
-    if (!searchQuery.trim()) {
-      // If no search query, show all registrations for current filter
-      setRegistrations(allRegistrations);
-      return;
+  const applyClientFilters = useCallback(() => {
+    let filtered = [...allRegistrations];
+
+    if (carrierFilter !== "all") {
+      filtered = filtered.filter(
+        (reg) => (reg.source ?? "airtel") === carrierFilter
+      );
     }
 
-    // Filter by search query (only search in name and town for privacy)
-    const queryLower = searchQuery.toLowerCase();
-    const filtered = allRegistrations.filter((reg) => {
-      const nameMatch = reg.customer_name?.toLowerCase().includes(queryLower);
-      const locationMatch = reg.installation_town?.toLowerCase().includes(queryLower);
-      const pkgMatch = reg.preferred_package?.toLowerCase().includes(queryLower);
-      return nameMatch || locationMatch || pkgMatch;
+    if (searchQuery.trim()) {
+      const queryLower = searchQuery.toLowerCase();
+      filtered = filtered.filter((reg) => {
+        const nameMatch = reg.customer_name?.toLowerCase().includes(queryLower);
+        const locationMatch = reg.installation_town?.toLowerCase().includes(queryLower);
+        const pkgMatch = reg.preferred_package?.toLowerCase().includes(queryLower);
+        const statusMatch = formatRegistrationStatusLabel(reg.status)
+          .toLowerCase()
+          .includes(queryLower);
+        const carrierMatch =
+          (reg.source ?? "airtel") === "safaricom"
+            ? "safaricom".includes(queryLower)
+            : "airtel".includes(queryLower);
+        return nameMatch || locationMatch || pkgMatch || statusMatch || carrierMatch;
+      });
+    }
+
+    filtered.sort((a, b) => {
+      if (sortBy === "name") {
+        return (a.customer_name ?? "").localeCompare(b.customer_name ?? "");
+      }
+      const dateA = new Date(a.created_at).getTime();
+      const dateB = new Date(b.created_at).getTime();
+      return sortBy === "oldest" ? dateA - dateB : dateB - dateA;
     });
+
     setRegistrations(filtered);
-  }, [searchQuery, allRegistrations]);
+  }, [allRegistrations, carrierFilter, searchQuery, sortBy]);
+
+  useEffect(() => {
+    applyClientFilters();
+  }, [applyClientFilters]);
+
+  const openRegistrationDetail = (registration: Registration) => {
+    const source = registration.source ?? "airtel";
+    router.push(`/registration/${registration.id}?source=${source}` as any);
+  };
 
   // Set up auto-sync with callback to refresh data after sync
   useEffect(() => {
@@ -330,32 +358,13 @@ export default function RegistrationsScreen() {
         source: "airtel" as const,
       }));
 
-      // Enhance Airtel rows with sync status
-      const enhancedRegistrations = (data || []).map((reg: any) => {
-        const hasMSFormsId = !!reg.ms_forms_response_id;
-        const hasMSFormsSubmittedAt = !!reg.ms_forms_submitted_at;
-
-        let syncStatus: "synced" | "pending" | "not_synced" = "not_synced";
-
-        if (hasMSFormsId && hasMSFormsSubmittedAt) {
-          syncStatus = "synced";
-        } else if (!hasMSFormsId) {
-          const createdAt = reg.created_at ? new Date(reg.created_at).getTime() : 0;
-          const now = Date.now();
-          const fiveMinutesAgo = now - 5 * 60 * 1000;
-
-          if (createdAt > fiveMinutesAgo) {
-            syncStatus = "pending";
-          } else {
-            syncStatus = "not_synced";
-          }
-        }
-
-        return mapCustomerRowToUnifiedList({
+      // Enhance Airtel rows with sync status (cloud save = synced for agents)
+      const enhancedRegistrations = (data || []).map((reg: any) =>
+        mapCustomerRowToUnifiedList({
           ...reg,
-          syncStatus,
-        });
-      });
+          syncStatus: "synced" as const,
+        })
+      );
 
       const safUnified = safData.map((row: any) => mapSafaricomRowToUnifiedList(row));
 
@@ -388,24 +397,9 @@ export default function RegistrationsScreen() {
       ]);
 
       if (allCustomer) {
-        const allEnhanced = allCustomer.map((reg: any) => {
-          const hasMSFormsId = !!reg.ms_forms_response_id;
-          const hasMSFormsSubmittedAt = !!reg.ms_forms_submitted_at;
-          let syncStatus: "synced" | "pending" | "not_synced" = "not_synced";
-          if (hasMSFormsId && hasMSFormsSubmittedAt) {
-            syncStatus = "synced";
-          } else if (!hasMSFormsId) {
-            const createdAt = reg.created_at ? new Date(reg.created_at).getTime() : 0;
-            const now = Date.now();
-            const fiveMinutesAgo = now - 5 * 60 * 1000;
-            if (createdAt > fiveMinutesAgo) {
-              syncStatus = "pending";
-            } else {
-              syncStatus = "not_synced";
-            }
-          }
-          return mapCustomerRowToUnifiedList({ ...reg, syncStatus });
-        });
+        const allEnhanced = allCustomer.map((reg: any) =>
+          mapCustomerRowToUnifiedList({ ...reg, syncStatus: "synced" as const })
+        );
         const safForCache = (allSaf ?? []).map((row: any) =>
           mapSafaricomRowToUnifiedList(row)
         );
@@ -460,100 +454,6 @@ export default function RegistrationsScreen() {
     setToastMessage(message);
     setToastType(type);
     setToastVisible(true);
-  };
-
-  const handleSyncRegistration = async (registrationId: string) => {
-    if (syncingIds.has(registrationId)) return;
-
-    const targetReg = allRegistrations.find((r) => r.id === registrationId);
-    if (targetReg?.source === "safaricom") {
-      showToast("Safaricom registrations are already saved online.", "info");
-      return;
-    }
-
-    const online = await isOnline();
-    if (!online) {
-      Alert.alert("Offline", "Please check your internet connection and try again.");
-      return;
-    }
-
-    setSyncingIds((prev) => new Set(prev).add(registrationId));
-    showToast("Syncing registration...", "info");
-
-    try {
-      // Check if this registration is in offline storage (needs sync to both Supabase AND MS Forms)
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        showToast("User not found", "error");
-        return;
-      }
-
-      // Check if this registration is in offline storage first
-      // If offline storage fails, skip it and sync from Supabase directly
-      let offlineRegistration = null;
-      try {
-        // Try to initialize and check offline storage
-        try {
-          await initOfflineStorage();
-        } catch (initError) {
-          // If initialization fails, skip offline check entirely
-          console.warn("⚠️ Offline storage not available, skipping offline check");
-          throw initError; // Re-throw to skip to Supabase sync
-        }
-        
-        try {
-          const pendingRegistrations = await getPendingRegistrations(user.id);
-          offlineRegistration = pendingRegistrations.find((p: any) => p.id === registrationId);
-        } catch (getError) {
-          // If getting pending registrations fails, skip offline check
-          console.warn("⚠️ Could not get pending registrations, proceeding with Supabase sync");
-        }
-      } catch (error) {
-        // Any error in offline storage check - proceed with Supabase sync
-        console.warn("⚠️ Offline storage check failed, proceeding with Supabase sync:", error);
-      }
-
-      let result;
-      if (offlineRegistration) {
-        // Registration is in offline storage - sync to BOTH Supabase and MS Forms
-        console.log("🔄 Syncing offline registration to Supabase and MS Forms");
-        // Use the offline sync which handles both Supabase and MS Forms
-        const { syncPendingRegistrations } = await import("../../lib/services/syncService");
-        const syncResult = await syncPendingRegistrations(user.id, (current, total) => {
-          showToast(`Syncing... ${current} of ${total}`, "info");
-        });
-        // Check if this specific registration was synced
-        const wasSynced = syncResult.synced > 0 && !syncResult.errors.some(
-          (err) => err.includes(registrationId)
-        );
-        result = {
-          success: wasSynced,
-          error: wasSynced ? undefined : syncResult.errors.find((err) => err.includes(registrationId)) || "Failed to sync",
-        };
-      } else {
-        // Registration is already in Supabase - only sync to MS Forms
-        console.log("🔄 Syncing registration from Supabase to MS Forms");
-        showToast("Syncing to Microsoft Forms...", "info");
-        result = await syncRegistrationFromSupabase(registrationId);
-      }
-
-      if (result.success) {
-        showToast("Registration synced successfully!", "success");
-        // Wait a bit for database to update, then reload
-        await new Promise(resolve => setTimeout(resolve, 500));
-        await loadRegistrations(); // Reload to update sync status
-      } else {
-        showToast(result.error || "Failed to sync registration", "error");
-      }
-    } catch (error: any) {
-      showToast(error.message || "An error occurred", "error");
-    } finally {
-      setSyncingIds((prev) => {
-        const newSet = new Set(prev);
-        newSet.delete(registrationId);
-        return newSet;
-      });
-    }
   };
 
   const handleSyncAll = async () => {
@@ -688,7 +588,7 @@ export default function RegistrationsScreen() {
           <Text style={styles.searchIcon}>🔍</Text>
           <TextInput
             style={styles.searchInput}
-            placeholder="Search customers..."
+            placeholder="Search name, town, status…"
             placeholderTextColor="#999999"
             value={searchQuery}
             onChangeText={setSearchQuery}
@@ -737,6 +637,89 @@ export default function RegistrationsScreen() {
             </View>
           )}
         </View>
+
+        <View style={styles.sortDropdownContainer}>
+          <TouchableOpacity
+            style={styles.filterDropdownButton}
+            onPress={() => {
+              setShowSortDropdown(!showSortDropdown);
+              setShowFilterDropdown(false);
+            }}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.filterDropdownText}>
+              {sortBy === "newest"
+                ? "Newest"
+                : sortBy === "oldest"
+                  ? "Oldest"
+                  : "Name"}
+            </Text>
+            <Text style={styles.filterDropdownArrow}>
+              {showSortDropdown ? "▲" : "▼"}
+            </Text>
+          </TouchableOpacity>
+          {showSortDropdown ? (
+            <View style={[styles.filterDropdownMenu, styles.sortDropdownMenu]}>
+              {(
+                [
+                  { value: "newest", label: "Newest first" },
+                  { value: "oldest", label: "Oldest first" },
+                  { value: "name", label: "Customer name" },
+                ] as const
+              ).map((option) => (
+                <TouchableOpacity
+                  key={option.value}
+                  style={[
+                    styles.filterDropdownItem,
+                    sortBy === option.value && styles.filterDropdownItemActive,
+                  ]}
+                  onPress={() => {
+                    setSortBy(option.value);
+                    setShowSortDropdown(false);
+                  }}
+                >
+                  <Text
+                    style={[
+                      styles.filterDropdownItemText,
+                      sortBy === option.value && styles.filterDropdownItemTextActive,
+                    ]}
+                  >
+                    {option.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          ) : null}
+        </View>
+      </View>
+
+      <View style={styles.carrierChipsRow}>
+        {(
+          [
+            { value: "all", label: "All networks" },
+            { value: "airtel", label: "Airtel" },
+            { value: "safaricom", label: "Safaricom" },
+          ] as const
+        ).map((chip) => (
+          <TouchableOpacity
+            key={chip.value}
+            style={[
+              styles.carrierChip,
+              carrierFilter === chip.value && styles.carrierChipActive,
+            ]}
+            onPress={() => setCarrierFilter(chip.value)}
+            activeOpacity={0.7}
+          >
+            <Text
+              style={[
+                styles.carrierChipText,
+                carrierFilter === chip.value && styles.carrierChipTextActive,
+              ]}
+            >
+              {chip.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
       </View>
 
       {/* Total Count and Sync All */}
@@ -777,7 +760,10 @@ export default function RegistrationsScreen() {
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
-        onScrollBeginDrag={() => setShowFilterDropdown(false)}
+        onScrollBeginDrag={() => {
+          setShowFilterDropdown(false);
+          setShowSortDropdown(false);
+        }}
       >
         {isLoading ? (
           <View style={styles.loadingContainer}>
@@ -798,21 +784,10 @@ export default function RegistrationsScreen() {
           <View style={styles.registrationsList}>
             {registrations.map((registration) => (
               <View key={registration.id} style={styles.registrationCard}>
-                {/* Header - Always Visible, Clickable to Expand/Collapse */}
                 <TouchableOpacity
                   style={styles.cardHeader}
                   activeOpacity={0.7}
-                  onPress={() => {
-                    setExpandedCards((prev) => {
-                      const newSet = new Set(prev);
-                      if (newSet.has(registration.id)) {
-                        newSet.delete(registration.id);
-                      } else {
-                        newSet.add(registration.id);
-                      }
-                      return newSet;
-                    });
-                  }}
+                  onPress={() => openRegistrationDetail(registration)}
                 >
                   <View style={styles.customerHeaderRow}>
                     <View style={styles.headerLeftSection}>
@@ -858,87 +833,24 @@ export default function RegistrationsScreen() {
                           {formatRegistrationStatusLabel(registration.status || "pending")}
                         </Text>
                       </View>
-                      <Text style={styles.expandIcon}>
-                        {expandedCards.has(registration.id) ? "▲" : "▼"}
-                      </Text>
+                      <Text style={styles.expandIcon}>›</Text>
                     </View>
+                  </View>
+                  <View style={styles.cardMetaRow}>
+                    {registration.installation_town ? (
+                      <Text style={styles.cardMetaText} numberOfLines={1}>
+                        {registration.installation_town}
+                      </Text>
+                    ) : null}
+                    <Text style={styles.cardMetaText}>
+                      {new Date(registration.created_at).toLocaleDateString("en-GB", {
+                        day: "numeric",
+                        month: "short",
+                        year: "numeric",
+                      })}
+                    </Text>
                   </View>
                 </TouchableOpacity>
-
-                {/* Collapsible Details */}
-                {expandedCards.has(registration.id) && (
-                  <View style={styles.expandedContent}>
-                    {/* Minimal Details (Privacy Compliant) */}
-                    <View style={styles.customerDetailsGrid}>
-                      {/* Package */}
-                      {registration.preferred_package && (
-                        <View style={styles.detailRow}>
-                          <Text style={styles.detailLabel}>Package:</Text>
-                          <Text style={styles.detailValue}>
-                            {(registration.source ?? "airtel") === "safaricom"
-                              ? registration.preferred_package
-                              : registration.preferred_package === "premium"
-                                ? "Premium"
-                                : "Standard"}
-                          </Text>
-                        </View>
-                      )}
-                      <View style={styles.detailRow}>
-                        <Text style={styles.detailLabel}>Network:</Text>
-                        <Text style={styles.detailValue}>
-                          {(registration.source ?? "airtel") === "safaricom"
-                            ? "Safaricom"
-                            : "Airtel"}
-                        </Text>
-                      </View>
-
-                      {/* Location (Town only - no specific address) */}
-                      {registration.installation_town && (
-                        <View style={styles.detailRow}>
-                          <Text style={styles.detailLabel}>Town:</Text>
-                          <Text style={styles.detailValue}>
-                            {registration.installation_town}
-                          </Text>
-                        </View>
-                      )}
-
-                      {/* Registration Date */}
-                      <View style={styles.detailRow}>
-                        <Text style={styles.detailLabel}>Registered:</Text>
-                        <Text style={styles.detailValue}>
-                          {new Date(registration.created_at).toLocaleDateString("en-US", {
-                            month: "short",
-                            day: "numeric",
-                            year: "numeric",
-                          })}
-                        </Text>
-                      </View>
-                    </View>
-
-                    {/* Action Buttons Row */}
-                    {/* Sync Button Row (Sync status already shown in header) */}
-                    {registration.syncStatus !== "synced" && (
-                      <View style={styles.syncRow}>
-                        <TouchableOpacity
-                          style={[
-                            styles.syncButton,
-                            syncingIds.has(registration.id) && styles.syncButtonDisabled,
-                          ]}
-                          onPress={(e) => {
-                            e.stopPropagation();
-                            handleSyncRegistration(registration.id);
-                          }}
-                          disabled={syncingIds.has(registration.id)}
-                          activeOpacity={0.7}
-                        >
-                          <Text style={styles.syncButtonText}>
-                            {syncingIds.has(registration.id) ? "Syncing..." : "Sync"}
-                          </Text>
-                        </TouchableOpacity>
-                      </View>
-                    )}
-                  </View>
-                )}
               </View>
             ))}
           </View>
@@ -984,12 +896,64 @@ const styles = StyleSheet.create({
   },
   searchFilterContainer: {
     flexDirection: "row",
+    flexWrap: "wrap",
     paddingHorizontal: 16,
     paddingVertical: 12,
     backgroundColor: "#FFFFFF",
     borderBottomWidth: 1,
     borderBottomColor: "#E0E0E0",
     gap: 12,
+  },
+  sortDropdownContainer: {
+    position: "relative",
+    minWidth: 96,
+  },
+  sortDropdownMenu: {
+    right: 0,
+    left: "auto",
+    minWidth: 150,
+  },
+  carrierChipsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingBottom: 10,
+    paddingTop: 4,
+    backgroundColor: "#FFFFFF",
+    borderBottomWidth: 1,
+    borderBottomColor: "#E0E0E0",
+  },
+  carrierChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: "#F0F0F0",
+  },
+  carrierChipActive: {
+    backgroundColor: "#E6F2FF",
+  },
+  carrierChipText: {
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+    color: "#666666",
+  },
+  carrierChipTextActive: {
+    color: "#0066CC",
+    fontFamily: "Inter_600SemiBold",
+  },
+  cardMetaRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    gap: 8,
+  },
+  cardMetaText: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    color: "#888888",
+    flex: 1,
   },
   searchContainer: {
     flex: 1,

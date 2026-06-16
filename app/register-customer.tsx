@@ -43,11 +43,7 @@ import CustomerInfoStep from "../components/customer-register/CustomerInfoStep";
 import InstallationDetailsStep from "../components/customer-register/InstallationDetailsStep";
 import VisitDetailsStep from "../components/customer-register/VisitDetailsStep";
 import { registerStyles } from "../components/register/styles";
-import {
-  registerCustomerToMSForms,
-  CustomerRegistrationData,
-} from "../lib/services/msFormsService";
-import { formatDateForMSForms } from "../lib/utils/customerRegistration";
+import { CustomerRegistrationData } from "../lib/services/msFormsService";
 import {
   savePendingRegistration,
   initOfflineStorage,
@@ -367,71 +363,6 @@ export default function RegisterCustomerScreen() {
         Alert.alert(
           "Registration Saved Offline",
           "Your registration has been saved and will be synced automatically when you're back online.",
-          [
-            {
-              text: "OK",
-              onPress: () => router.replace("/dashboard" as any),
-            },
-          ]
-        );
-        return;
-      }
-
-      // Step 2: Submit to Microsoft Forms
-      let msFormsResult;
-      try {
-        console.log("=== MS Forms Submission Start ===");
-        console.log("Customer Data:", JSON.stringify(customerData, null, 2));
-        console.log("Agent Info:", JSON.stringify(agentInfo, null, 2));
-
-        msFormsResult = await registerCustomerToMSForms(
-          customerData,
-          agentInfo
-        );
-
-        console.log("=== MS Forms Submission Result ===");
-        console.log("Success:", msFormsResult.success);
-        console.log("Response ID:", msFormsResult.responseId);
-        console.log("Submit Date:", msFormsResult.submitDate);
-        console.log("Responder:", msFormsResult.responder);
-        console.log("Error:", msFormsResult.error);
-        console.log("Full Response:", JSON.stringify(msFormsResult, null, 2));
-
-        if (msFormsResult.success && msFormsResult.responseId) {
-          console.log(
-            "✅ MS Forms submission successful! Response ID:",
-            msFormsResult.responseId
-          );
-          // Update database with MS Forms response ID
-          const { error: updateError } = await supabase
-            .from("customer_registrations")
-            .update({
-              ms_forms_response_id: msFormsResult.responseId,
-              ms_forms_submitted_at: new Date().toISOString(),
-            })
-            .eq("id", dbRegistration.id);
-
-          if (updateError) {
-            console.error("Error updating MS Forms response ID:", updateError);
-          } else {
-            console.log("✅ Database updated with MS Forms response ID");
-          }
-        } else {
-          console.warn("⚠️ MS Forms submission returned success=false");
-          console.warn("Error message:", msFormsResult.error);
-        }
-      } catch (msFormsError: any) {
-        console.error("=== MS Forms Submission Error ===");
-        console.error("Error Type:", msFormsError?.constructor?.name);
-        console.error("Error Message:", msFormsError?.message);
-        console.error("Error Stack:", msFormsError?.stack);
-        console.error("Full Error:", JSON.stringify(msFormsError, null, 2));
-
-        // Registration is saved in database, but MS Forms submission failed
-        // This is okay - we can retry later
-        Alert.alert(
-          "Registration Saved",
-          "Customer registration has been saved, but submission to Microsoft Forms failed. It will be retried automatically.",
           [
             {
               text: "OK",

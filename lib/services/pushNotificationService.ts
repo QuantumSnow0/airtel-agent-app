@@ -11,7 +11,19 @@ export function isExpoGo(): boolean {
 export type NotificationPermissionState = "granted" | "denied" | "undetermined";
 
 /** Must match `defaultChannel` in app.json and channelId in push payloads. */
-export const ANDROID_NOTIFICATION_CHANNEL_ID = "default";
+export const ANDROID_NOTIFICATION_CHANNEL_ID = "wam_alerts";
+
+const presentedNotificationIds = new Set<string>();
+const PRESENTED_NOTIFICATION_TTL_MS = 120_000;
+
+function rememberPresentedNotification(id: string): void {
+  presentedNotificationIds.add(id);
+  setTimeout(() => presentedNotificationIds.delete(id), PRESENTED_NOTIFICATION_TTL_MS);
+}
+
+export function markNotificationAsPresented(id: string): void {
+  rememberPresentedNotification(id);
+}
 
 // Configure how notifications are handled when app is in foreground
 Notifications.setNotificationHandler({
@@ -31,7 +43,7 @@ export async function ensureAndroidNotificationChannel(): Promise<void> {
   if (Platform.OS !== "android") return;
 
   await Notifications.setNotificationChannelAsync(ANDROID_NOTIFICATION_CHANNEL_ID, {
-    name: "General",
+    name: "Alerts",
     description: "Payments, registrations, and account updates",
     importance: Notifications.AndroidImportance.MAX,
     vibrationPattern: [0, 250, 250, 250],
@@ -284,6 +296,124 @@ export async function unregisterDeviceToken(
     console.error("Error unregistering device token:", error);
     return { success: false, error: error.message || "Unknown error" };
   }
+}
+
+export type AgentNotificationRecord = {
+  id: string;
+  title: string;
+  message: string;
+  type?: string;
+  related_id?: string | null;
+  metadata?: Record<string, unknown> | null;
+};
+
+/**
+ * Show a system banner/sound when a notification row is inserted (fallback when push is unavailable).
+ */
+export async function presentLocalNotification(
+  record: AgentNotificationRecord
+): Promise<void> {
+  if (!record.id || presentedNotificationIds.has(record.id)) return;
+
+  const permission = await getNotificationPermissionState();
+  if (permission !== "granted") return;
+
+  rememberPresentedNotification(record.id);
+  await ensureAndroidNotificationChannel();
+
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: record.title,
+      body: record.message,
+      sound: "default",
+      data: {
+        type: record.type,
+        notificationId: record.id,
+        relatedId: record.related_id ?? undefined,
+        metadata: record.metadata ?? {},
+      },
+      priority: Notifications.AndroidNotificationPriority.MAX,
+    },
+    trigger:
+      Platform.OS === "android"
+        ? { channelId: ANDROID_NOTIFICATION_CHANNEL_ID }
+        : null,
+  });
+}
+
+let notificationAlertsChannel: ReturnType<typeof supabase.channel> | null = null;
+
+/**
+ * Realtime INSERT → local OS notification so alerts work even when push/webhook fails.
+ */
+export function subscribeToNotificationAlerts(agentId: string): void {
+  if (notificationAlertsChannel) {
+    supabase.removeChannel(notificationAlertsChannel);
+    notificationAlertsChannel = null;
+  }
+
+  notificationAlertsChannel = supabase
+    .channel(`agent-notification-alerts-${agentId}`)
+    .on(
+      "postgres_changes",
+      {
+        event: "INSERT",
+        schema: "public",
+        table: "notifications",
+        filter: `agent_id=eq.${agentId}`,
+      },
+      (payload) => {
+        const record = payload.new as AgentNotificationRecord | null;
+        if (!record?.id) return;
+        void presentLocalNotification(record);
+      }
+    )
+    .subscribe();
+}
+
+export function unsubscribeFromNotificationAlerts(): void {
+  if (notificationAlertsChannel) {
+    supabase.removeChannel(notificationAlertsChannel);
+    notificationAlertsChannel = null;
+  }
+}
+
+/**
+ * After login: subscribe to DB inserts and register push token for background delivery.
+ */
+export async function activateAgentNotifications(agentId: string): Promise<void> {
+  subscribeToNotificationAlerts(agentId);
+
+  const permission = await getNotificationPermissionState();
+  if (permission !== "granted" || isExpoGo()) return;
+
+  const token = await getDeviceToken();
+  if (token) {
+    await registerDeviceToken(agentId, token);
+  }
+}
+
+let notificationListenersCleanup: (() => void) | null = null;
+
+export function ensureNotificationListeners(
+  onNotificationTapped: (response: Notifications.NotificationResponse) => void
+): void {
+  if (notificationListenersCleanup) return;
+
+  notificationListenersCleanup = setupNotificationListeners(
+    (notification) => {
+      const notificationId = notification.request.content.data?.notificationId;
+      if (typeof notificationId === "string") {
+        markNotificationAsPresented(notificationId);
+      }
+    },
+    onNotificationTapped
+  );
+}
+
+export function teardownNotificationListeners(): void {
+  notificationListenersCleanup?.();
+  notificationListenersCleanup = null;
 }
 
 /**

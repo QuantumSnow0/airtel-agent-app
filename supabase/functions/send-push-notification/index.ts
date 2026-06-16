@@ -136,7 +136,7 @@ serve(async (req) => {
 
       // channelId is Android-only; apply when not explicitly iOS (covers null legacy rows)
       if (dt.device_type !== "ios") {
-        payload.channelId = "default";
+        payload.channelId = "wam_alerts";
         payload.priority = "max";
       }
 

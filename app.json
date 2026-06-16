@@ -2,7 +2,7 @@
   "expo": {
     "name": "WAM Apps",
     "slug": "wam-apps",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "wamapps",
@@ -19,7 +19,7 @@
     "android": {
       "package": "com.wam.apps",
       "googleServicesFile": "./google-services.json",
-      "versionCode": 9,
+      "versionCode": 10,
       "statusBar": {
         "barStyle": "dark-content",
         "backgroundColor": "#FFFFFF"
@@ -77,8 +77,7 @@
         {
           "icon": "./assets/images/android-icon-monochrome.png",
           "color": "#0066CC",
-          "defaultChannel": "default",
-          "sounds": []
+          "defaultChannel": "wam_alerts"
         }
       ]
     ],

@@ -886,38 +886,13 @@ export default function DashboardScreen() {
         return;
       }
       
-      // Enhance registrations with sync status
-      const enhancedRegistrations = (registrations || []).map((reg: any) => {
-        const hasMSFormsId = !!reg.ms_forms_response_id;
-        const hasMSFormsSubmittedAt = !!reg.ms_forms_submitted_at;
-        
-        // Determine sync status
-        let syncStatus: "synced" | "pending" | "not_synced" = "not_synced";
-        
-        if (hasMSFormsId && hasMSFormsSubmittedAt) {
-          // Successfully synced to both Supabase and MS Forms
-          syncStatus = "synced";
-        } else if (!hasMSFormsId) {
-          // Not synced to MS Forms yet
-          // Check if it was created recently (might be syncing)
-          const createdAt = reg.created_at ? new Date(reg.created_at).getTime() : 0;
-          const now = Date.now();
-          const fiveMinutesAgo = now - 5 * 60 * 1000; // 5 minutes
-          
-          if (createdAt > fiveMinutesAgo) {
-            // Recently created, likely pending sync
-            syncStatus = "pending";
-          } else {
-            // Older registration without MS Forms ID - not synced
-            syncStatus = "not_synced";
-          }
-        }
-        
-        return mapCustomerRowToUnifiedList({
+      // Enhance registrations with sync status (cloud save = synced for agents)
+      const enhancedRegistrations = (registrations || []).map((reg: any) =>
+        mapCustomerRowToUnifiedList({
           ...reg,
-          syncStatus,
-        });
-      });
+          syncStatus: "synced" as const,
+        })
+      );
 
       const safUnified = (safRows ?? []).map((row: any) =>
         mapSafaricomRowToUnifiedList(row)
@@ -1512,6 +1487,15 @@ export default function DashboardScreen() {
           segments={commissionSegments}
         />
 
+        <TouchableOpacity
+          style={styles.paymentHistoryLink}
+          onPress={() => router.push("/earnings-history" as any)}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.paymentHistoryLinkText}>View payment history</Text>
+          <Text style={styles.paymentHistoryLinkArrow}>›</Text>
+        </TouchableOpacity>
+
         {/* Airtel table (from sketch) */}
         <View style={styles.airtelTableCard}>
           <Text style={styles.airtelTableTitle}>Airtel</Text>
@@ -1912,6 +1896,27 @@ const createStyles = () => {
   welcomeTextBlock: {
     flex: 1,
     marginRight: scaleWidth(12),
+  },
+  paymentHistoryLink: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#FFFFFF",
+    borderRadius: scaleWidth(10),
+    paddingHorizontal: scaleWidth(14),
+    paddingVertical: scaleHeight(12),
+    marginBottom: scaleHeight(16),
+    borderWidth: 1,
+    borderColor: "#E8E8E8",
+  },
+  paymentHistoryLinkText: {
+    fontSize: scaleFont(14),
+    fontFamily: "Inter_600SemiBold",
+    color: "#0066CC",
+  },
+  paymentHistoryLinkArrow: {
+    fontSize: scaleFont(20),
+    color: "#0066CC",
   },
   airtelTableCard: {
     backgroundColor: "#FFFFFF",

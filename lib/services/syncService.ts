@@ -5,7 +5,6 @@ import {
   deletePendingRegistration,
   PendingRegistration,
 } from "./offlineStorage";
-import { registerCustomerToMSForms } from "./msFormsService";
 import { createSyncFailureNotification } from "./notificationService";
 
 export interface SyncResult {
@@ -47,6 +46,8 @@ export async function isOnline(): Promise<boolean> {
 async function syncSingleRegistration(
   registration: PendingRegistration
 ): Promise<boolean> {
+  let savedRegistrationId: string | undefined;
+
   try {
     console.log(`🔄 Syncing registration: ${registration.id}`);
 
@@ -78,58 +79,11 @@ async function syncSingleRegistration(
       throw new Error(`Database error: ${dbError.message}`);
     }
 
-    // Step 2: Submit to Microsoft Forms (using main agent details)
-    const msFormsResult = await registerCustomerToMSForms(
-      registration.customerData,
-      {
-        name: "samson maingi karau",
-        mobile: "254789457580",
-      }
-    );
+    savedRegistrationId = dbRegistration?.id;
 
-    if (msFormsResult.success && msFormsResult.responseId) {
-      // Update database with MS Forms response ID
-      const responseIdString = String(msFormsResult.responseId);
-      const submittedAt = new Date().toISOString();
-      
-      console.log(`🔄 Updating Supabase for registration ${dbRegistration.id}`);
-      console.log(`   Response ID: ${responseIdString}`);
-      console.log(`   Submitted At: ${submittedAt}`);
-      
-      const { data: updatedData, error: updateError } = await supabase
-        .from("customer_registrations")
-        .update({
-          ms_forms_response_id: responseIdString,
-          ms_forms_submitted_at: submittedAt,
-        })
-        .eq("id", dbRegistration.id)
-        .select(); // Return updated data to verify
-
-      if (updateError) {
-        console.error("❌ Error updating MS Forms response ID:", updateError);
-        console.error("   Error code:", updateError.code);
-        console.error("   Error message:", updateError.message);
-        throw new Error(`Failed to update database: ${updateError.message}`);
-      }
-
-      if (!updatedData || updatedData.length === 0) {
-        console.error("❌ No rows updated - check RLS policies or registration ID");
-        throw new Error("Failed to update registration - no rows affected. Check RLS policies.");
-      }
-
-      console.log("✅ Successfully updated database:");
-      console.log(`   ms_forms_response_id: ${updatedData[0].ms_forms_response_id}`);
-      console.log(`   ms_forms_submitted_at: ${updatedData[0].ms_forms_submitted_at}`);
-
-      // Mark as synced and delete from pending
-      await deletePendingRegistration(registration.id);
-      console.log(`✅ Successfully synced registration: ${registration.id}`);
-      return true;
-    } else {
-      throw new Error(
-        msFormsResult.error || "Microsoft Forms submission failed"
-      );
-    }
+    await deletePendingRegistration(registration.id);
+    console.log(`✅ Successfully synced registration to cloud: ${registration.id}`);
+    return true;
   } catch (error: any) {
     const errorMessage = error.message || "Unknown error";
     console.error(`❌ Failed to sync registration ${registration.id}:`, errorMessage);
@@ -141,7 +95,7 @@ async function syncSingleRegistration(
       await createSyncFailureNotification(
         registration.agent_id,
         registration.customerData.customerName,
-        dbRegistration?.id,
+        savedRegistrationId,
         errorMessage
       );
     }
@@ -250,202 +204,44 @@ export async function syncPendingRegistrations(
 }
 
 /**
- * Sync a single registration from Supabase to MS Forms
- * Used for manual sync of registrations that are already in Supabase
+ * Confirm a registration is saved in Supabase (cloud sync).
+ * MS Forms submission is handled by super admin — not from the agent app.
  */
 export async function syncRegistrationFromSupabase(
   registrationId: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    console.log(`🔄 Syncing registration from Supabase: ${registrationId}`);
-
-    // Check if online
     const online = await isOnline();
     if (!online) {
       return { success: false, error: "Device is offline" };
     }
 
-    // Fetch registration from Supabase
     const { data: registration, error: fetchError } = await supabase
       .from("customer_registrations")
-      .select("*")
+      .select("id")
       .eq("id", registrationId)
-      .single();
+      .maybeSingle();
 
     if (fetchError || !registration) {
       return { success: false, error: fetchError?.message || "Registration not found" };
     }
 
-    // Check if already synced
-    if (registration.ms_forms_response_id) {
-      return { success: true }; // Already synced
-    }
-
-    // Fetch agent data
-    const { data: agent, error: agentError } = await supabase
-      .from("agents")
-      .select("name, airtel_phone, safaricom_phone")
-      .eq("id", registration.agent_id)
-      .single();
-
-    if (agentError || !agent) {
-      console.error("Agent fetch error:", agentError);
-      return { success: false, error: `Agent data not found: ${agentError?.message || "Unknown error"}` };
-    }
-
-    // Prepare customer data for MS Forms
-    const customerData = {
-      customerName: registration.customer_name,
-      airtelNumber: registration.airtel_number,
-      alternateNumber: registration.alternate_number || "",
-      email: registration.email || "",
-      preferredPackage: registration.preferred_package || "",
-      unitsRequired: registration.units_required ?? 1,
-      installationTown: registration.installation_town || "",
-      deliveryLandmark: registration.delivery_landmark || "",
-      installationLocation: registration.installation_location || "",
-      visitDate: registration.visit_date || "",
-      visitTime: registration.visit_time || "",
-    };
-
-    // Use main agent details for MS Forms
-    const agentData = {
-      name: "samson maingi karau",
-      mobile: "254789457580",
-    };
-
-    // Submit to MS Forms
-    const { registerCustomerToMSForms } = await import("./msFormsService");
-    const msFormsResult = await registerCustomerToMSForms(customerData, agentData);
-
-    console.log("📋 MS Forms Result:", {
-      success: msFormsResult.success,
-      responseId: msFormsResult.responseId,
-      error: msFormsResult.error,
-    });
-
-    if (msFormsResult.success && msFormsResult.responseId) {
-      // Update Supabase with MS Forms response ID
-      console.log(`🔄 Updating Supabase for registration ${registrationId} with response ID: ${msFormsResult.responseId}`);
-      
-      const { data: updatedData, error: updateError } = await supabase
-        .from("customer_registrations")
-        .update({
-          ms_forms_response_id: msFormsResult.responseId.toString(), // Ensure it's a string
-          ms_forms_submitted_at: new Date().toISOString(),
-        })
-        .eq("id", registrationId)
-        .select(); // Return updated data to verify
-
-      if (updateError) {
-        console.error("❌ Error updating MS Forms response ID:", updateError);
-        console.error("Update error details:", JSON.stringify(updateError, null, 2));
-        return { success: false, error: updateError.message };
-      }
-
-      if (!updatedData || updatedData.length === 0) {
-        console.error("❌ No rows updated - registration might not exist or RLS policy blocking");
-        return { success: false, error: "Failed to update registration - no rows affected" };
-      }
-
-      console.log(`✅ Successfully synced registration: ${registrationId}`);
-      console.log("✅ Updated data:", updatedData[0]);
-      return { success: true };
-    } else {
-      console.error("❌ MS Forms submission failed:", msFormsResult.error);
-      
-      // Create SYNC_FAILURE notification
-      await createSyncFailureNotification(
-        registration.agent_id,
-        registration.customer_name,
-        registrationId,
-        msFormsResult.error || "Microsoft Forms submission failed"
-      );
-      
-      return {
-        success: false,
-        error: msFormsResult.error || "Microsoft Forms submission failed",
-      };
-    }
-  } catch (error: any) {
-    console.error(`❌ Failed to sync registration ${registrationId}:`, error);
-    return { success: false, error: error.message || "Unknown error" };
+    return { success: true };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return { success: false, error: message };
   }
 }
 
 /**
  * Sync all unsynced registrations for an agent
  */
+/** MS Forms sync is super-admin only; agents only sync offline → cloud. */
 export async function syncAllUnsyncedRegistrations(
-  agentId: string,
-  onProgress?: (current: number, total: number) => void
+  _agentId: string,
+  _onProgress?: (current: number, total: number) => void
 ): Promise<SyncResult> {
-  const result: SyncResult = {
-    success: true,
-    synced: 0,
-    failed: 0,
-    errors: [],
-  };
-
-  try {
-    // Check if online
-    const online = await isOnline();
-    if (!online) {
-      result.success = false;
-      result.errors.push("Device is offline");
-      return result;
-    }
-
-    // Fetch all unsynced registrations
-    const { data: registrations, error } = await supabase
-      .from("customer_registrations")
-      .select("id")
-      .eq("agent_id", agentId)
-      .is("ms_forms_response_id", null)
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      result.success = false;
-      result.errors.push(error.message);
-      return result;
-    }
-
-    if (!registrations || registrations.length === 0) {
-      return result; // No unsynced registrations
-    }
-
-    console.log(`🔄 Found ${registrations.length} unsynced registrations`);
-
-    const total = registrations.length;
-
-    // Sync each registration
-    for (let i = 0; i < registrations.length; i++) {
-      const reg = registrations[i];
-      onProgress?.(i + 1, total);
-      
-      const syncResult = await syncRegistrationFromSupabase(reg.id);
-      if (syncResult.success) {
-        result.synced++;
-      } else {
-        result.failed++;
-        result.errors.push(`Registration ${reg.id}: ${syncResult.error || "Unknown error"}`);
-      }
-
-      // Small delay between syncs
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-
-    console.log(
-      `✅ Sync complete: ${result.synced} synced, ${result.failed} failed`
-    );
-
-    return result;
-  } catch (error: any) {
-    console.error("❌ Error during sync:", error);
-    result.success = false;
-    result.errors.push(error.message || "Unknown error");
-    return result;
-  }
+  return { success: true, synced: 0, failed: 0, errors: [] };
 }
 
 /**

@@ -691,6 +691,24 @@ export default function ProfileScreen() {
                 </TouchableOpacity>
               </>
             ) : null}
+            <View style={styles.infoDivider} />
+            <TouchableOpacity
+              style={styles.infoRow}
+              onPress={() => router.push("/earnings-history" as any)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.infoLabel}>Payment history</Text>
+              <Text style={styles.notificationEnableLink}>View payouts</Text>
+            </TouchableOpacity>
+            <View style={styles.infoDivider} />
+            <TouchableOpacity
+              style={styles.infoRow}
+              onPress={() => router.push("/help" as any)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.infoLabel}>Help & support</Text>
+              <Text style={styles.notificationEnableLink}>FAQs & contact</Text>
+            </TouchableOpacity>
           </View>
         </View>
 
