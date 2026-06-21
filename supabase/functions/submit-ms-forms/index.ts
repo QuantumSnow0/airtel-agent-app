@@ -128,7 +128,7 @@ function getPackageName(pkg: "standard" | "premium" | string | undefined | null)
 function normalizeUnitsRequired(value: unknown): number {
   const n = Number(value);
   if (!Number.isFinite(n) || n < 1) return 1;
-  return Math.min(99, Math.floor(n));
+  return Math.min(2, Math.floor(n));
 }
 
 function formatInstallationLocation(town: string | undefined | null, location: string | undefined | null): string {

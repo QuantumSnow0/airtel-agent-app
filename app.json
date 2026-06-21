@@ -2,7 +2,7 @@
   "expo": {
     "name": "WAM Apps",
     "slug": "wam-apps",
-    "version": "1.0.5",
+    "version": "1.0.7",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "wamapps",
@@ -19,7 +19,7 @@
     "android": {
       "package": "com.wam.apps",
       "googleServicesFile": "./google-services.json",
-      "versionCode": 10,
+      "versionCode": 12,
       "statusBar": {
         "barStyle": "dark-content",
         "backgroundColor": "#FFFFFF"

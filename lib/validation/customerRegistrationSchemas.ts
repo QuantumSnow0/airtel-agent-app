@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ALL_TOWNS } from "../../constants/installationLocations";
-import { validatePhoneNumber, validateEmail } from "../utils/customerRegistration";
+import { validatePhoneNumber, validateEmail, MAX_UNITS_REQUIRED } from "../utils/customerRegistration";
 
 /**
  * Zod validation schemas for customer registration form
@@ -31,7 +31,7 @@ const unitsRequiredSchema = z
   .number({ invalid_type_error: "Quantity must be a number" })
   .int("Quantity must be a whole number")
   .min(1, "Quantity must be at least 1")
-  .max(99, "Quantity cannot exceed 99");
+  .max(MAX_UNITS_REQUIRED, `Quantity cannot exceed ${MAX_UNITS_REQUIRED}`);
 
 // Town validation
 const townSchema = z.enum(ALL_TOWNS as [string, ...string[]], {

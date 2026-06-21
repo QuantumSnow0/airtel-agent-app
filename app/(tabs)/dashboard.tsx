@@ -66,10 +66,12 @@ import {
   getSafaricomCommissionKesForRegistration,
   getSafaricomDealPriceKes,
 } from "../../lib/commissions/safaricomAgentCommission";
+import { computeAirtelInstalledCommissionKsh } from "../../lib/commissions/airtelWalletCommission";
+import { computeCombinedWalletCommissionKsh } from "../../lib/commissions/walletCommission";
 import {
-  computeAirtelInstalledCommissionKsh,
-  computeCombinedWalletCommissionKsh,
-} from "../../lib/commissions/walletCommission";
+  getEffectiveCommissionPackage,
+  getEffectiveCommissionUnits,
+} from "../../lib/commissions/airtelCommissionEffective";
 import {
   fetchCommissionRates,
   getCachedCommissionRates,
@@ -163,6 +165,9 @@ export default function DashboardScreen() {
   const [safaricomInstalled, setSafaricomInstalled] = useState(0);
   const [safaricomInstalledCommissionKsh, setSafaricomInstalledCommissionKsh] =
     useState(0);
+  const [airtelInstalledCommissionKsh, setAirtelInstalledCommissionKsh] = useState(0);
+  const [airtelPremiumCommissionKsh, setAirtelPremiumCommissionKsh] = useState(0);
+  const [airtelStandardCommissionKsh, setAirtelStandardCommissionKsh] = useState(0);
   const [safaricomFiberRegistered, setSafaricomFiberRegistered] = useState(0);
   const [safaricomFiberInstalled, setSafaricomFiberInstalled] = useState(0);
   const [safaricomFiberCommissionKsh, setSafaricomFiberCommissionKsh] = useState(0);
@@ -1152,11 +1157,33 @@ export default function DashboardScreen() {
         !standardInstError && standardInstalledCount != null ? standardInstalledCount : 0;
       const rates = await fetchCommissionRates();
       setAirtelCommissionRates(rates);
+
+      const { data: installedAirtelRows } = await supabase
+        .from("customer_registrations")
+        .select(
+          "preferred_package, units_required, commission_package, commission_units"
+        )
+        .eq("agent_id", agentId)
+        .eq("status", "installed");
+
+      let premCommKsh = 0;
+      let stdCommKsh = 0;
+      for (const row of installedAirtelRows ?? []) {
+        const units = getEffectiveCommissionUnits(row);
+        if (getEffectiveCommissionPackage(row) === "premium") {
+          premCommKsh += rates.premium * units;
+        } else {
+          stdCommKsh += rates.standard * units;
+        }
+      }
+      const airtelCommKsh = premCommKsh + stdCommKsh;
+      setAirtelPremiumCommissionKsh(premCommKsh);
+      setAirtelStandardCommissionKsh(stdCommKsh);
+      setAirtelInstalledCommissionKsh(airtelCommKsh);
+
       const walletTotalKsh = computeCombinedWalletCommissionKsh(
-        premiumInstN,
-        standardInstN,
-        safCommKsh,
-        rates
+        airtelCommKsh,
+        safCommKsh
       );
       setBalance(walletTotalKsh);
 
@@ -1241,15 +1268,6 @@ export default function DashboardScreen() {
   );
   const avatarStyle = getDiceBearStyleForName(agentData?.name);
 
-  const airtelStandardCommissionKsh =
-    standardInstalled * airtelCommissionRates.standard;
-  const airtelPremiumCommissionKsh =
-    premiumInstalled * airtelCommissionRates.premium;
-  const airtelInstalledCommissionKsh = computeAirtelInstalledCommissionKsh(
-    premiumInstalled,
-    standardInstalled,
-    airtelCommissionRates
-  );
   const combinedEstimatedCommissionKsh =
     airtelInstalledCommissionKsh + safaricomInstalledCommissionKsh;
   const walletDisplayKsh = combinedEstimatedCommissionKsh;

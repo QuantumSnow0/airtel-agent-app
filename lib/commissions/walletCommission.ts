@@ -1,71 +1,51 @@
 import { supabase } from "../supabase";
-import type { AirtelCommissionRates } from "../services/commissionRatesService";
-import {
-  fetchCommissionRates,
-  getCachedCommissionRates,
-} from "../services/commissionRatesService";
+import { fetchCommissionRates } from "../services/commissionRatesService";
 import { getSafaricomCommissionKesForRegistration } from "./safaricomAgentCommission";
-
-/** Airtel installed commission from counts (matches dashboard logic). */
-export function computeAirtelInstalledCommissionKsh(
-  premiumInstalled: number,
-  standardInstalled: number,
-  rates: AirtelCommissionRates = getCachedCommissionRates()
-): number {
-  return (
-    premiumInstalled * rates.premium + standardInstalled * rates.standard
-  );
-}
+import { computeAirtelInstalledCommissionKsh } from "./airtelWalletCommission";
 
 /** Full wallet total: Airtel installed + Safaricom installed (agent share). */
 export function computeCombinedWalletCommissionKsh(
-  premiumInstalled: number,
-  standardInstalled: number,
-  safaricomInstalledCommissionKsh: number,
-  rates?: AirtelCommissionRates
+  airtelInstalledCommissionKsh: number,
+  safaricomInstalledCommissionKsh: number
 ): number {
-  return (
-    computeAirtelInstalledCommissionKsh(
-      premiumInstalled,
-      standardInstalled,
-      rates
-    ) + safaricomInstalledCommissionKsh
-  );
+  return airtelInstalledCommissionKsh + safaricomInstalledCommissionKsh;
 }
 
 /**
  * Load combined commission KSh for an agent (used where dashboard cache is unavailable).
- * Ignores DB `agents.total_earnings` — that value may omit Safaricom until triggers are extended.
  */
 export async function fetchWalletCommissionKsh(agentId: string): Promise<number> {
   const rates = await fetchCommissionRates();
 
-  const [premRes, stdRes, safRes] = await Promise.all([
-    supabase
-      .from("customer_registrations")
-      .select("*", { count: "exact", head: true })
-      .eq("agent_id", agentId)
-      .eq("status", "installed")
-      .eq("preferred_package", "premium"),
-    supabase
-      .from("customer_registrations")
-      .select("*", { count: "exact", head: true })
-      .eq("agent_id", agentId)
-      .eq("status", "installed")
-      .eq("preferred_package", "standard"),
-    supabase
-      .from("safaricom_registrations")
-      .select("service_package, fiber_deal_id, portable_deal_id, dedicated_wifi_deal_id")
-      .eq("agent_id", agentId)
-      .eq("status", "installed"),
-  ]);
+  const { data: installedAirtel, error: airtelErr } = await supabase
+    .from("customer_registrations")
+    .select(
+      "preferred_package, units_required, commission_package, commission_units"
+    )
+    .eq("agent_id", agentId)
+    .eq("status", "installed");
 
-  const p = premRes.count ?? 0;
-  const s = stdRes.count ?? 0;
+  if (airtelErr) {
+    console.warn("fetchWalletCommissionKsh airtel:", airtelErr);
+  }
+
+  const airtelKsh = computeAirtelInstalledCommissionKsh(
+    installedAirtel ?? [],
+    rates
+  );
+
+  const { data: safRows, error: safErr } = await supabase
+    .from("safaricom_registrations")
+    .select(
+      "service_package, fiber_deal_id, portable_deal_id, dedicated_wifi_deal_id"
+    )
+    .eq("agent_id", agentId)
+    .eq("status", "installed");
+
   let safKsh = 0;
-  const msg = String(safRes.error?.message || "").toLowerCase();
-  if (!safRes.error && safRes.data?.length) {
-    safKsh = safRes.data.reduce(
+  const msg = String(safErr?.message || "").toLowerCase();
+  if (!safErr && safRows?.length) {
+    safKsh = safRows.reduce(
       (sum, row) =>
         sum +
         getSafaricomCommissionKesForRegistration(
@@ -78,9 +58,9 @@ export async function fetchWalletCommissionKsh(agentId: string): Promise<number>
         ),
       0
     );
-  } else if (safRes.error && !msg.includes("does not exist")) {
-    console.warn("fetchWalletCommissionKsh safaricom:", safRes.error);
+  } else if (safErr && !msg.includes("does not exist")) {
+    console.warn("fetchWalletCommissionKsh safaricom:", safErr);
   }
 
-  return computeCombinedWalletCommissionKsh(p, s, safKsh, rates);
+  return computeCombinedWalletCommissionKsh(airtelKsh, safKsh);
 }

@@ -1,5 +1,13 @@
 import { supabase } from "../supabase";
-import { fetchCommissionRates, getCachedCommissionRates } from "../services/commissionRatesService";
+import {
+  getEffectiveCommissionPackage,
+  getEffectiveCommissionUnits,
+} from "../commissions/airtelCommissionEffective";
+import {
+  fetchCommissionRates,
+  getCachedCommissionRates,
+  type AirtelCommissionRates,
+} from "../services/commissionRatesService";
 import { getSafaricomCommissionKesForRegistration } from "../commissions/safaricomAgentCommission";
 import type { RegistrationSource } from "./unifiedListRegistration";
 
@@ -29,6 +37,8 @@ export type RegistrationDetail = {
   alternate_number?: string;
   email?: string;
   units_required?: number;
+  commission_package?: string | null;
+  commission_units?: number | null;
   ms_forms_response_id?: string | null;
   ms_forms_submitted_at?: string | null;
   service_package?: string;
@@ -37,9 +47,20 @@ export type RegistrationDetail = {
   timeline: RegistrationTimelineStep[];
 };
 
-function normalizeUnitsRequired(value: unknown): number {
-  const n = Number(value);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 1;
+function computeAirtelCommission(
+  row: {
+    preferred_package?: string;
+    units_required?: number;
+    commission_package?: string | null;
+    commission_units?: number | null;
+    status: string;
+  },
+  rates: AirtelCommissionRates = getCachedCommissionRates()
+): number {
+  if (row.status !== "installed") return 0;
+  const units = getEffectiveCommissionUnits(row);
+  const pkg = getEffectiveCommissionPackage(row);
+  return pkg === "premium" ? rates.premium * units : rates.standard * units;
 }
 
 function buildTimeline(
@@ -99,22 +120,6 @@ function buildTimeline(
   return steps;
 }
 
-function computeAirtelCommission(
-  row: {
-    preferred_package?: string;
-    units_required?: number;
-    status: string;
-  },
-  rates = getCachedCommissionRates()
-): number {
-  if (row.status !== "installed") return 0;
-  const units = normalizeUnitsRequired(row.units_required);
-  if (row.preferred_package === "premium") {
-    return rates.premium * units;
-  }
-  return rates.standard * units;
-}
-
 export async function fetchRegistrationDetail(
   agentId: string,
   registrationId: string,
@@ -136,9 +141,9 @@ export async function fetchRegistrationDetail(
       if (error) return { detail: null, error: error.message };
       if (!data) return { detail: null, error: "Registration not found" };
 
-      const installationTown = [data.fiber_region_name, data.fiber_cluster_name]
-        .filter(Boolean)
-        .join(" · ") || [data.install_county, data.install_town].filter(Boolean).join(" · ");
+      const installationTown =
+        [data.fiber_region_name, data.fiber_cluster_name].filter(Boolean).join(" · ") ||
+        [data.install_county, data.install_town].filter(Boolean).join(" · ");
 
       const commission =
         data.status === "installed"
@@ -170,7 +175,7 @@ export async function fetchRegistrationDetail(
     const { data, error } = await supabase
       .from("customer_registrations")
       .select(
-        "id, customer_name, email, airtel_number, alternate_number, preferred_package, units_required, installation_town, installation_location, delivery_landmark, visit_date, visit_time, status, created_at, updated_at, ms_forms_response_id, ms_forms_submitted_at"
+        "id, customer_name, email, airtel_number, alternate_number, preferred_package, units_required, commission_package, commission_units, installation_town, installation_location, delivery_landmark, visit_date, visit_time, status, created_at, updated_at, ms_forms_response_id, ms_forms_submitted_at"
       )
       .eq("id", registrationId)
       .eq("agent_id", agentId)
@@ -178,8 +183,6 @@ export async function fetchRegistrationDetail(
 
     if (error) return { detail: null, error: error.message };
     if (!data) return { detail: null, error: "Registration not found" };
-
-    let syncStatus: RegistrationDetail["syncStatus"] = "synced";
 
     return {
       detail: {
@@ -198,10 +201,12 @@ export async function fetchRegistrationDetail(
         airtel_number: data.airtel_number,
         alternate_number: data.alternate_number,
         email: data.email,
-        units_required: normalizeUnitsRequired(data.units_required),
+        units_required: data.units_required ?? 1,
+        commission_package: data.commission_package,
+        commission_units: data.commission_units,
         ms_forms_response_id: data.ms_forms_response_id,
         ms_forms_submitted_at: data.ms_forms_submitted_at,
-        syncStatus,
+        syncStatus: "synced",
         estimated_commission_ksh: computeAirtelCommission(data),
         timeline: buildTimeline(data.status, data.created_at, data.updated_at),
       },

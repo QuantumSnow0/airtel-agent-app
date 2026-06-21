@@ -58,11 +58,13 @@ export function convertTo24Hour(time12h: string): string {
   return `${hours.toString().padStart(2, "0")}:${minutes}`;
 }
 
-/** MS Forms total units — default 1, clamped to 1–99. */
+/** MS Forms total units — default 1, clamped to 1–2. */
+export const MAX_UNITS_REQUIRED = 2;
+
 export function normalizeUnitsRequired(value: unknown): number {
   const n = Number(value);
   if (!Number.isFinite(n) || n < 1) return 1;
-  return Math.min(99, Math.floor(n));
+  return Math.min(MAX_UNITS_REQUIRED, Math.floor(n));
 }
 
 /**

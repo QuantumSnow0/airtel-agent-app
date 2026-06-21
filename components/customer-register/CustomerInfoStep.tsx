@@ -1,6 +1,7 @@
 import { View, Text, TextInput, TouchableOpacity } from "react-native";
 import { Controller, Control } from "react-hook-form";
 import { CustomerRegistrationFormData } from "@/lib/validation/customerRegistrationSchemas";
+import { MAX_UNITS_REQUIRED } from "@/lib/utils/customerRegistration";
 import { registerStyles } from "../register/styles";
 
 interface CustomerInfoStepProps {
@@ -145,7 +146,12 @@ export default function CustomerInfoStep({
                   value={String(value ?? 1)}
                   onChangeText={(text) => {
                     const digits = text.replace(/\D/g, "");
-                    onChange(digits === "" ? 1 : Number(digits));
+                    if (digits === "") {
+                      onChange(1);
+                      return;
+                    }
+                    const n = Math.min(MAX_UNITS_REQUIRED, Math.max(1, Number(digits)));
+                    onChange(n);
                   }}
                   onBlur={onBlur}
                   keyboardType="number-pad"
@@ -162,7 +168,9 @@ export default function CustomerInfoStep({
                     alignItems: "center",
                     justifyContent: "center",
                   }}
-                  onPress={() => onChange(Math.min(99, (value ?? 1) + 1))}
+                  onPress={() =>
+                    onChange(Math.min(MAX_UNITS_REQUIRED, (value ?? 1) + 1))
+                  }
                 >
                   <Text style={{ fontSize: 20, color: "#333333" }}>+</Text>
                 </TouchableOpacity>
@@ -175,7 +183,7 @@ export default function CustomerInfoStep({
                   color: "#999999",
                 }}
               >
-                Default is 1 device per registration
+                1–{MAX_UNITS_REQUIRED} devices per registration (maximum {MAX_UNITS_REQUIRED})
               </Text>
               {error && <Text style={registerStyles.errorText}>{error.message}</Text>}
             </>
