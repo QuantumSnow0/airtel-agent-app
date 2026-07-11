@@ -6,6 +6,10 @@ import {
   PendingRegistration,
 } from "./offlineStorage";
 import { createSyncFailureNotification } from "./notificationService";
+import {
+  maybeAutoSubmitToMSFormsWithRetry,
+  syncPendingMSFormsForAgent,
+} from "./msFormsAutoSubmitService";
 
 export interface SyncResult {
   success: boolean;
@@ -80,6 +84,13 @@ async function syncSingleRegistration(
     }
 
     savedRegistrationId = dbRegistration?.id;
+
+    if (savedRegistrationId) {
+      const msResult = await maybeAutoSubmitToMSFormsWithRetry(savedRegistrationId);
+      if (!msResult.ok) {
+        console.warn("MS Forms auto-submit after sync:", msResult.error);
+      }
+    }
 
     await deletePendingRegistration(registration.id);
     console.log(`✅ Successfully synced registration to cloud: ${registration.id}`);
@@ -234,14 +245,19 @@ export async function syncRegistrationFromSupabase(
 }
 
 /**
- * Sync all unsynced registrations for an agent
+ * Submit cloud registrations that are not yet in MS Forms (automatic mode only).
  */
-/** MS Forms sync is super-admin only; agents only sync offline → cloud. */
 export async function syncAllUnsyncedRegistrations(
-  _agentId: string,
-  _onProgress?: (current: number, total: number) => void
+  agentId: string,
+  onProgress?: (current: number, total: number) => void
 ): Promise<SyncResult> {
-  return { success: true, synced: 0, failed: 0, errors: [] };
+  const ms = await syncPendingMSFormsForAgent(agentId, onProgress);
+  return {
+    success: ms.success,
+    synced: ms.synced,
+    failed: ms.failed,
+    errors: ms.errors,
+  };
 }
 
 /**
@@ -264,6 +280,9 @@ export function setupAutoSync(
     isSyncing = true;
     try {
       await syncPendingRegistrations(agentId, onProgress, onComplete);
+      if (agentId) {
+        await syncPendingMSFormsForAgent(agentId);
+      }
     } catch (error) {
       console.error("Error in auto-sync:", error);
     } finally {

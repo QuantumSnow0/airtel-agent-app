@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   Alert,
   RefreshControl,
+  Switch,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { useFonts } from "expo-font";
@@ -56,6 +57,10 @@ import {
   getAgentAvatarSeed,
   getDiceBearStyleForName,
 } from "../../lib/utils/dicebear";
+import {
+  fetchDispatchAvailability,
+  setDispatchAvailability,
+} from "../../lib/services/leadDispatchService";
 
 // Helper function to get first letter of name
 const getInitial = (name?: string, email?: string): string => {
@@ -141,6 +146,9 @@ export default function ProfileScreen() {
   const [totalEarningsKsh, setTotalEarningsKsh] = useState(0);
   const [paidFromLedgerKsh, setPaidFromLedgerKsh] = useState(0);
   const [isOffline, setIsOffline] = useState(false);
+  const [leadsAvailable, setLeadsAvailable] = useState(false);
+  const [canReceiveLeads, setCanReceiveLeads] = useState(false);
+  const [togglingLeads, setTogglingLeads] = useState(false);
 
   const [fontsLoaded] = useFonts({
     Poppins_600SemiBold,
@@ -239,6 +247,10 @@ export default function ProfileScreen() {
       } else {
         setAgentData(agent);
       }
+
+      const dispatchAvail = await fetchDispatchAvailability(currentUser.id);
+      setLeadsAvailable(dispatchAvail.isAvailable);
+      setCanReceiveLeads(dispatchAvail.canReceiveLeads);
 
       // Load registration statistics (Airtel + Safaricom)
       const [
@@ -655,6 +667,39 @@ export default function ProfileScreen() {
         <View style={styles.infoSection}>
           <Text style={styles.sectionTitle}>Account Details</Text>
           <View style={styles.infoCard}>
+            {agentData?.status === "approved" && canReceiveLeads ? (
+              <>
+                <View style={styles.infoRow}>
+                  <View style={{ flex: 1, paddingRight: scaleWidth(12) }}>
+                    <Text style={styles.infoLabel}>Available for leads</Text>
+                    <Text style={styles.leadsToggleHint}>
+                      Receive inbound offers in your county
+                    </Text>
+                  </View>
+                  <Switch
+                    value={leadsAvailable}
+                    onValueChange={async (value) => {
+                      if (!user?.id) return;
+                      setTogglingLeads(true);
+                      const result = await setDispatchAvailability(user.id, value);
+                      setTogglingLeads(false);
+                      if (!result.success) {
+                        Alert.alert(
+                          "Could not update",
+                          result.error ?? "Please try again.",
+                        );
+                        return;
+                      }
+                      setLeadsAvailable(value);
+                    }}
+                    disabled={togglingLeads}
+                    trackColor={{ false: "#CCCCCC", true: "#0066CC" }}
+                    thumbColor="#FFFFFF"
+                  />
+                </View>
+                <View style={styles.infoDivider} />
+              </>
+            ) : null}
             <View style={styles.infoRow}>
               <Text style={styles.infoLabel}>Member Since</Text>
               <Text style={styles.infoValue}>
@@ -974,6 +1019,12 @@ const styles = StyleSheet.create({
     textAlign: "right",
     flex: 1,
     marginLeft: 16,
+  },
+  leadsToggleHint: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    color: "#888888",
+    marginTop: 2,
   },
   infoDivider: {
     height: 1,

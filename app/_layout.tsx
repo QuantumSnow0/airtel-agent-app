@@ -5,13 +5,15 @@ import { ActivityIndicator, StatusBar, StyleSheet, View } from "react-native";
 import { checkAppVersion } from "../lib/services/appVersionService";
 import {
   activateAgentNotifications,
-  ensureAndroidNotificationChannel,
+  ensureAllNotificationChannels,
   ensureNotificationListeners,
   getLastNotificationResponse,
   requestNotificationPermissions,
   unsubscribeFromNotificationAlerts,
 } from "../lib/services/pushNotificationService";
 import { supabase } from "../lib/supabase";
+import { LeadDispatchManager } from "../components/LeadDispatchManager";
+import { promptLeadOfferModal } from "../lib/dispatch/leadOfferBridge";
 
 // Move ref outside component to persist across remounts (React Strict Mode)
 const pushNotificationsSetupRef = { current: false };
@@ -401,7 +403,7 @@ export default function RootLayout() {
       console.log("🔔 Starting push notification setup...");
       console.log("📋 Current time:", new Date().toISOString());
 
-      await ensureAndroidNotificationChannel();
+      await ensureAllNotificationChannels();
       ensureNotificationListeners((response) => {
         console.log("👆 Notification tapped:", response);
         handleNotificationTap(response);
@@ -504,6 +506,23 @@ export default function RootLayout() {
           break;
         case "PAYOUT_RECEIVED":
           router.push("/earnings-history" as any);
+          break;
+        case "LEAD_OFFER": {
+          const offerId =
+            data.metadata?.offerId ?? data.offerId;
+          if (offerId) {
+            promptLeadOfferModal(String(offerId));
+          } else {
+            promptLeadOfferModal(null);
+          }
+          break;
+        }
+        case "LEAD_OVERDUE":
+          if (data.relatedId) {
+            router.push(`/lead/${data.relatedId}` as any);
+          } else {
+            router.push("/leads" as any);
+          }
           break;
         default:
           // Unknown type - go to dashboard instead of notifications to avoid confusion
@@ -630,6 +649,7 @@ export default function RootLayout() {
           headerShown: false,
         }}
       />
+      <LeadDispatchManager />
     </>
   );
 }

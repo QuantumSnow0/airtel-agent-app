@@ -118,10 +118,14 @@ serve(async (req) => {
     // Prepare push notification payload.
     // Foreground banners use setNotificationHandler; background/killed needs OS-level display
     // (Android channel + priority, iOS alert via title/body).
+    const isLeadOffer = notification.type === "LEAD_OFFER";
+    const leadOfferChannelId = "wam_lead_offers";
+    const leadOfferSound = "lead_offer.wav";
+
     const pushNotifications = deviceTokens.map((dt) => {
       const payload: Record<string, unknown> = {
         to: dt.token,
-        sound: "default",
+        sound: isLeadOffer ? leadOfferSound : "default",
         title: notification.title,
         body: notification.message,
         data: {
@@ -131,12 +135,11 @@ serve(async (req) => {
           metadata: notification.metadata || {},
         },
         badge: 1,
-        priority: "high",
+        priority: isLeadOffer ? "max" : "high",
       };
 
-      // channelId is Android-only; apply when not explicitly iOS (covers null legacy rows)
       if (dt.device_type !== "ios") {
-        payload.channelId = "wam_alerts";
+        payload.channelId = isLeadOffer ? leadOfferChannelId : "wam_alerts";
         payload.priority = "max";
       }
 

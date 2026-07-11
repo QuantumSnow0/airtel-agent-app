@@ -1,7 +1,32 @@
+/**
+ * Lead-offer alert delivery (v1).
+ *
+ * Three layers — do not rely on push alone:
+ *   1. Supabase Realtime (`lead_offers` INSERT) → modal + in-app sound (primary, app open)
+ *   2. Supabase Realtime (`notifications` INSERT) → backup OS banner + sound (app background)
+ *   3. Expo push webhook → backup when realtime socket is down / app killed
+ *
+ * Foreground: modal + playLeadOfferAlert() — no duplicate OS banner.
+ * Background: dedicated Android channel `wam_lead_offers` with custom sound.
+ */
+
 import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
-import { Linking, Platform } from "react-native";
+import { AppState, Linking, Platform } from "react-native";
 import { supabase } from "../supabase";
+import {
+  extractOfferIdFromPushData,
+  isLeadOfferNotificationData,
+  promptLeadOfferModal,
+} from "../dispatch/leadOfferBridge";
+import { LEAD_OFFER_SOUND_FILENAME } from "../config/leadAlertConfig";
+import {
+  formatNotificationDisplay,
+  mapDbNotification,
+} from "../notifications/presentation";
+
+/** Bundled via expo-notifications plugin `sounds` in app.json. */
+export const LEAD_OFFER_SOUND = LEAD_OFFER_SOUND_FILENAME;
 
 /** True when running inside Expo Go (push token fetch often hangs or is unsupported). */
 export function isExpoGo(): boolean {
@@ -10,8 +35,11 @@ export function isExpoGo(): boolean {
 
 export type NotificationPermissionState = "granted" | "denied" | "undetermined";
 
-/** Must match `defaultChannel` in app.json and channelId in push payloads. */
+/** General alerts: payments, registrations, account updates. */
 export const ANDROID_NOTIFICATION_CHANNEL_ID = "wam_alerts";
+
+/** Urgent lead offers — custom sound, max importance. */
+export const ANDROID_LEAD_OFFER_CHANNEL_ID = "wam_lead_offers";
 
 const presentedNotificationIds = new Set<string>();
 const PRESENTED_NOTIFICATION_TTL_MS = 120_000;
@@ -25,35 +53,59 @@ export function markNotificationAsPresented(id: string): void {
   rememberPresentedNotification(id);
 }
 
-// Configure how notifications are handled when app is in foreground
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
+  handleNotification: async (notification) => {
+    const data = notification.request.content.data as
+      | Record<string, unknown>
+      | undefined;
+    const isLeadOffer = isLeadOfferNotificationData(data);
+
+    return {
+      shouldShowAlert: !isLeadOffer,
+      shouldPlaySound: true,
+      shouldSetBadge: true,
+      shouldShowBanner: !isLeadOffer,
+      shouldShowList: !isLeadOffer,
+    };
+  },
 });
 
-/**
- * Android 8+ requires a high-importance channel for heads-up banners when the app is closed.
- */
 export async function ensureAndroidNotificationChannel(): Promise<void> {
   if (Platform.OS !== "android") return;
 
   await Notifications.setNotificationChannelAsync(ANDROID_NOTIFICATION_CHANNEL_ID, {
     name: "Alerts",
     description: "Payments, registrations, and account updates",
-    importance: Notifications.AndroidImportance.MAX,
+    importance: Notifications.AndroidImportance.HIGH,
     vibrationPattern: [0, 250, 250, 250],
     lightColor: "#0066CC",
     sound: "default",
     enableVibrate: true,
     showBadge: true,
     lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
-    bypassDnd: false,
   });
+}
+
+export async function ensureAndroidLeadOfferChannel(): Promise<void> {
+  if (Platform.OS !== "android") return;
+
+  await Notifications.setNotificationChannelAsync(ANDROID_LEAD_OFFER_CHANNEL_ID, {
+    name: "Lead offers",
+    description: "Urgent new customer lead alerts",
+    importance: Notifications.AndroidImportance.MAX,
+    vibrationPattern: [0, 400, 200, 400, 200, 600],
+    lightColor: "#E53935",
+    sound: LEAD_OFFER_SOUND,
+    enableVibrate: true,
+    showBadge: true,
+    lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+    bypassDnd: true,
+  });
+}
+
+export async function ensureAllNotificationChannels(): Promise<void> {
+  await ensureAndroidNotificationChannel();
+  await ensureAndroidLeadOfferChannel();
 }
 
 export async function getNotificationPermissionState(): Promise<NotificationPermissionState> {
@@ -67,7 +119,6 @@ export async function getNotificationPermissionState(): Promise<NotificationPerm
   }
 }
 
-/** Short steps for the device settings screen (shown in the enable prompt). */
 export function getNotificationSettingsInstructions(): string {
   if (Platform.OS === "ios") {
     return "Go to Settings → WAM Apps → Notifications, then turn on Allow Notifications.";
@@ -84,14 +135,10 @@ async function registerDeviceTokenInBackground(agentId: string): Promise<void> {
   }
 }
 
-/**
- * Try the system permission dialog, or open app settings if already denied.
- * Registers the device token when permission is granted and agentId is provided.
- */
 export async function enableNotificationsForAgent(
-  agentId?: string
+  agentId?: string,
 ): Promise<"granted" | "denied" | "settings_opened"> {
-  await ensureAndroidNotificationChannel();
+  await ensureAllNotificationChannels();
 
   const state = await getNotificationPermissionState();
   if (state === "granted") {
@@ -126,20 +173,14 @@ export async function enableNotificationsForAgent(
   return "settings_opened";
 }
 
-/**
- * Request notification permissions and return status
- */
 export async function requestNotificationPermissions(): Promise<boolean> {
   try {
-    await ensureAndroidNotificationChannel();
+    await ensureAllNotificationChannels();
 
-    console.log("🔐 Checking existing notification permissions...");
     const { status: existingStatus } = await Notifications.getPermissionsAsync();
-    console.log("📊 Existing permission status:", existingStatus);
     let finalStatus = existingStatus;
 
     if (existingStatus !== "granted") {
-      console.log("🔐 Requesting notification permissions...");
       const { status } = await Notifications.requestPermissionsAsync({
         ios: {
           allowAlert: true,
@@ -147,32 +188,24 @@ export async function requestNotificationPermissions(): Promise<boolean> {
           allowSound: true,
         },
       });
-      console.log("📊 New permission status:", status);
       finalStatus = status;
     }
 
-    const granted = finalStatus === "granted";
-    console.log("✅ Permission granted:", granted);
-    return granted;
+    return finalStatus === "granted";
   } catch (error) {
-    console.error("❌ Error requesting notification permissions:", error);
+    console.error("Error requesting notification permissions:", error);
     return false;
   }
 }
 
-/**
- * Get the device push notification token
- */
 export async function getDeviceToken(timeoutMs = 12_000): Promise<string | null> {
   if (isExpoGo()) {
-    console.log("⚠️ Skipping push token in Expo Go — use a dev/production build to test push");
     return null;
   }
 
   try {
-    await ensureAndroidNotificationChannel();
+    await ensureAllNotificationChannels();
 
-    console.log("📱 Getting Expo push token...");
     const projectId = "79ca40ff-774f-4322-bf65-0adc31b78223";
     const tokenPromise = Notifications.getExpoPushTokenAsync({ projectId });
     const timeoutPromise = new Promise<null>((resolve) => {
@@ -180,31 +213,21 @@ export async function getDeviceToken(timeoutMs = 12_000): Promise<string | null>
     });
 
     const tokenData = await Promise.race([tokenPromise, timeoutPromise]);
-    if (!tokenData) {
-      console.warn("⚠️ getExpoPushTokenAsync timed out or returned nothing");
-      return null;
-    }
-
-    console.log("✅ Token obtained, length:", tokenData.data?.length || 0);
+    if (!tokenData) return null;
     return tokenData.data;
   } catch (error) {
-    console.error("❌ Error getting device token:", error);
+    console.error("Error getting device token:", error);
     return null;
   }
 }
 
-/**
- * Register or update device token in database
- */
 export async function registerDeviceToken(
   agentId: string,
-  token: string
+  token: string,
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    // Get device type
     const deviceType = Platform.OS === "ios" ? "ios" : "android";
 
-    // Check if token already exists
     const { data: existingToken, error: fetchError } = await supabase
       .from("device_tokens")
       .select("id, agent_id")
@@ -212,14 +235,11 @@ export async function registerDeviceToken(
       .single();
 
     if (fetchError && fetchError.code !== "PGRST116") {
-      // PGRST116 = no rows returned, which is fine
       console.error("Error checking existing token:", fetchError);
     }
 
     if (existingToken) {
-      // Token exists - update it
       if (existingToken.agent_id !== agentId) {
-        // Token belongs to different agent - update agent_id
         const { error: updateError } = await supabase
           .from("device_tokens")
           .update({
@@ -231,11 +251,9 @@ export async function registerDeviceToken(
           .eq("id", existingToken.id);
 
         if (updateError) {
-          console.error("Error updating device token:", updateError);
           return { success: false, error: updateError.message };
         }
       } else {
-        // Token belongs to same agent - just update last_used_at
         const { error: updateError } = await supabase
           .from("device_tokens")
           .update({
@@ -245,12 +263,10 @@ export async function registerDeviceToken(
           .eq("id", existingToken.id);
 
         if (updateError) {
-          console.error("Error updating device token:", updateError);
           return { success: false, error: updateError.message };
         }
       }
     } else {
-      // Token doesn't exist - insert new
       const { error: insertError } = await supabase
         .from("device_tokens")
         .insert({
@@ -261,24 +277,19 @@ export async function registerDeviceToken(
         });
 
       if (insertError) {
-        console.error("Error inserting device token:", insertError);
         return { success: false, error: insertError.message };
       }
     }
 
-    console.log("✅ Device token registered successfully");
     return { success: true };
-  } catch (error: any) {
-    console.error("Error registering device token:", error);
-    return { success: false, error: error.message || "Unknown error" };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return { success: false, error: message };
   }
 }
 
-/**
- * Unregister device token (when user logs out)
- */
 export async function unregisterDeviceToken(
-  token: string
+  token: string,
 ): Promise<{ success: boolean; error?: string }> {
   try {
     const { error } = await supabase
@@ -287,14 +298,13 @@ export async function unregisterDeviceToken(
       .eq("token", token);
 
     if (error) {
-      console.error("Error unregistering device token:", error);
       return { success: false, error: error.message };
     }
 
     return { success: true };
-  } catch (error: any) {
-    console.error("Error unregistering device token:", error);
-    return { success: false, error: error.message || "Unknown error" };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return { success: false, error: message };
   }
 }
 
@@ -307,11 +317,13 @@ export type AgentNotificationRecord = {
   metadata?: Record<string, unknown> | null;
 };
 
-/**
- * Show a system banner/sound when a notification row is inserted (fallback when push is unavailable).
- */
-export async function presentLocalNotification(
-  record: AgentNotificationRecord
+function isLeadOfferRecord(record: AgentNotificationRecord): boolean {
+  return record.type === "LEAD_OFFER";
+}
+
+async function scheduleOsNotification(
+  record: AgentNotificationRecord,
+  options: { channelId: string; sound: string },
 ): Promise<void> {
   if (!record.id || presentedNotificationIds.has(record.id)) return;
 
@@ -319,13 +331,13 @@ export async function presentLocalNotification(
   if (permission !== "granted") return;
 
   rememberPresentedNotification(record.id);
-  await ensureAndroidNotificationChannel();
+  await ensureAllNotificationChannels();
 
   await Notifications.scheduleNotificationAsync({
     content: {
       title: record.title,
       body: record.message,
-      sound: "default",
+      sound: options.sound,
       data: {
         type: record.type,
         notificationId: record.id,
@@ -333,19 +345,82 @@ export async function presentLocalNotification(
         metadata: record.metadata ?? {},
       },
       priority: Notifications.AndroidNotificationPriority.MAX,
+      ...(Platform.OS === "android" ? { channelId: options.channelId } : {}),
     },
     trigger:
       Platform.OS === "android"
-        ? { channelId: ANDROID_NOTIFICATION_CHANNEL_ID }
+        ? { channelId: options.channelId }
         : null,
+  });
+}
+
+export async function presentLeadOfferNotification(
+  record: AgentNotificationRecord,
+): Promise<void> {
+  const mapped = mapDbNotification({
+    id: record.id,
+    type: record.type ?? "LEAD_OFFER",
+    title: record.title,
+    message: record.message,
+    is_read: true,
+    created_at: new Date().toISOString(),
+    related_id: record.related_id,
+    metadata: record.metadata,
+  });
+  const display = formatNotificationDisplay(mapped);
+
+  await scheduleOsNotification(
+    {
+      ...record,
+      title: display.title,
+      message: display.message,
+    },
+    {
+      channelId: ANDROID_LEAD_OFFER_CHANNEL_ID,
+      sound: LEAD_OFFER_SOUND,
+    },
+  );
+}
+
+/** Re-ping while offer is pending and app is in background (not deduped). */
+export async function presentLeadOfferReminder(offerId: string): Promise<void> {
+  const permission = await getNotificationPermissionState();
+  if (permission !== "granted") return;
+
+  await ensureAllNotificationChannels();
+
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: "Lead offer waiting",
+      body: "Still waiting for your response — accept or decline before it expires.",
+      sound: LEAD_OFFER_SOUND,
+      data: {
+        type: "LEAD_OFFER",
+        metadata: { offerId },
+      },
+      priority: Notifications.AndroidNotificationPriority.MAX,
+      ...(Platform.OS === "android"
+        ? { channelId: ANDROID_LEAD_OFFER_CHANNEL_ID }
+        : {}),
+    },
+    trigger:
+      Platform.OS === "android"
+        ? { channelId: ANDROID_LEAD_OFFER_CHANNEL_ID }
+        : null,
+  });
+}
+
+export async function presentLocalNotification(
+  record: AgentNotificationRecord,
+): Promise<void> {
+  await scheduleOsNotification(record, {
+    channelId: ANDROID_NOTIFICATION_CHANNEL_ID,
+    sound: "default",
   });
 }
 
 let notificationAlertsChannel: ReturnType<typeof supabase.channel> | null = null;
 
-/**
- * Realtime INSERT → local OS notification so alerts work even when push/webhook fails.
- */
 export function subscribeToNotificationAlerts(agentId: string): void {
   if (notificationAlertsChannel) {
     supabase.removeChannel(notificationAlertsChannel);
@@ -365,8 +440,25 @@ export function subscribeToNotificationAlerts(agentId: string): void {
       (payload) => {
         const record = payload.new as AgentNotificationRecord | null;
         if (!record?.id) return;
+
+        if (isLeadOfferRecord(record)) {
+          const offerId =
+            record.metadata && typeof record.metadata === "object"
+              ? String((record.metadata as { offerId?: string }).offerId ?? "")
+              : "";
+
+          promptLeadOfferModal(offerId || null);
+
+          if (AppState.currentState === "active") {
+            return;
+          }
+
+          void presentLeadOfferNotification(record);
+          return;
+        }
+
         void presentLocalNotification(record);
-      }
+      },
     )
     .subscribe();
 }
@@ -378,9 +470,6 @@ export function unsubscribeFromNotificationAlerts(): void {
   }
 }
 
-/**
- * After login: subscribe to DB inserts and register push token for background delivery.
- */
 export async function activateAgentNotifications(agentId: string): Promise<void> {
   subscribeToNotificationAlerts(agentId);
 
@@ -396,18 +485,26 @@ export async function activateAgentNotifications(agentId: string): Promise<void>
 let notificationListenersCleanup: (() => void) | null = null;
 
 export function ensureNotificationListeners(
-  onNotificationTapped: (response: Notifications.NotificationResponse) => void
+  onNotificationTapped: (response: Notifications.NotificationResponse) => void,
 ): void {
   if (notificationListenersCleanup) return;
 
   notificationListenersCleanup = setupNotificationListeners(
     (notification) => {
-      const notificationId = notification.request.content.data?.notificationId;
+      const data = notification.request.content.data as
+        | Record<string, unknown>
+        | undefined;
+
+      if (isLeadOfferNotificationData(data)) {
+        promptLeadOfferModal(extractOfferIdFromPushData(data));
+      }
+
+      const notificationId = data?.notificationId;
       if (typeof notificationId === "string") {
         markNotificationAsPresented(notificationId);
       }
     },
-    onNotificationTapped
+    onNotificationTapped,
   );
 }
 
@@ -416,38 +513,27 @@ export function teardownNotificationListeners(): void {
   notificationListenersCleanup = null;
 }
 
-/**
- * Setup notification listeners for foreground and background notifications
- */
 export function setupNotificationListeners(
   onNotificationReceived: (notification: Notifications.Notification) => void,
-  onNotificationTapped: (notification: Notifications.NotificationResponse) => void
+  onNotificationTapped: (response: Notifications.NotificationResponse) => void,
 ) {
-  // Listener for notifications received while app is in foreground
   const foregroundSubscription = Notifications.addNotificationReceivedListener(
     (notification) => {
-      console.log("📬 Foreground notification received:", notification);
       onNotificationReceived(notification);
-    }
+    },
   );
 
-  // Listener for when user taps on a notification
   const responseSubscription =
     Notifications.addNotificationResponseReceivedListener((response) => {
-      console.log("👆 Notification tapped:", response);
       onNotificationTapped(response);
     });
 
-  // Return cleanup function
   return () => {
     foregroundSubscription.remove();
     responseSubscription.remove();
   };
 }
 
-/**
- * Get the last notification response (when app opened from notification)
- */
 export async function getLastNotificationResponse(): Promise<Notifications.NotificationResponse | null> {
   try {
     return await Notifications.getLastNotificationResponseAsync();
@@ -456,6 +542,3 @@ export async function getLastNotificationResponse(): Promise<Notifications.Notif
     return null;
   }
 }
-
-
-

@@ -21,85 +21,21 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../lib/supabase";
-import {
-  getCachedNotifications,
-  saveNotificationsToCache,
-  clearNotificationsCache,
-  CachedNotification,
-} from "../lib/cache/notificationsCache";
+import { NotificationCard } from "../components/NotificationCard";
+import { promptLeadOfferModal } from "../lib/dispatch/leadOfferBridge";
+import { mapDbNotification } from "../lib/notifications/presentation";
 import {
     getResponsivePadding,
     scaleFont,
     scaleHeight,
     scaleWidth,
 } from "../lib/utils/responsive";
-
-/**
- * NOTIFICATION TYPES EXPLANATION:
- * 
- * 1. REGISTRATION_STATUS_CHANGE
- *    - Triggered when: A customer registration status changes (installed or closed: rejected / duplicate / cancelled)
- *    - Logic: Database trigger or admin action updates status → System creates notification
- *    - Purpose: Agent knows their registration was processed
- *    - Action: Agent can view the registration details
- * 
- * 2. EARNINGS_UPDATE
- *    - Triggered when: Balance/earnings change (new installation = commission earned)
- *    - Logic: Database trigger calculates earnings → System creates notification
- *    - Purpose: Agent knows they earned money
- *    - Action: Agent can view balance/earnings
- * 
- * 3. ACCOUNT_STATUS_CHANGE
- *    - Triggered when: Admin changes agent status (pending → approved/rejected/banned)
- *    - Logic: Admin updates agent status → System creates notification
- *    - Purpose: Agent knows their account status changed
- *    - Action: Agent can view account status
- * 
- * 4. SYNC_FAILURE
- *    - Triggered when: Registration fails to sync to Microsoft Forms
- *    - Logic: Sync service detects failure → System creates notification
- *    - Purpose: Agent knows there's an issue to resolve
- *    - Action: Agent can retry sync
- * 
- * 5. SYSTEM_ANNOUNCEMENT
- *    - Triggered when: Admin sends announcement to all agents
- *    - Logic: Admin creates announcement → System sends to all agents
- *    - Purpose: Important updates/information
- *    - Action: Agent reads announcement
- *
- * 6. PAYOUT_RECEIVED
- *    - Triggered when: Admin records a payout in Payout Manager
- *    - Logic: agent_payments insert → DB trigger creates notification
- *    - Purpose: Agent knows money was sent
- *    - Action: Agent can view profile / wallet
- */
-
-// Notification type definitions
-type NotificationType =
-  | "REGISTRATION_STATUS_CHANGE"
-  | "EARNINGS_UPDATE"
-  | "ACCOUNT_STATUS_CHANGE"
-  | "SYNC_FAILURE"
-  | "SYSTEM_ANNOUNCEMENT"
-  | "PAYOUT_RECEIVED";
-
-interface Notification {
-  id: string;
-  type: NotificationType;
-  title: string;
-  message: string;
-  isRead: boolean;
-  createdAt: string;
-  // Optional data for navigation/actions
-  relatedId?: string; // e.g., registration_id, customer_id
-  metadata?: {
-    // Type-specific data
-    status?: string; // For status changes
-    amount?: number; // For earnings / payouts
-    customerName?: string; // For registrations
-    reference?: string | null; // For payouts
-  };
-}
+import {
+  getCachedNotifications,
+  saveNotificationsToCache,
+} from "../lib/cache/notificationsCache";
+import { MaterialIcons } from "@expo/vector-icons";
+import type { AppNotification } from "../lib/notifications/types";
 
 export default function NotificationsScreen() {
   const router = useRouter();
@@ -107,7 +43,7 @@ export default function NotificationsScreen() {
   const insets = useSafeAreaInsets();
   const [refreshing, setRefreshing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const hasLoadedRef = useRef(false);
   const subscriptionRef = useRef<any>(null);
 
@@ -200,7 +136,7 @@ export default function NotificationsScreen() {
         console.log("📴 Offline - loading notifications from cache");
         const cachedNotifications = await getCachedNotifications();
         if (cachedNotifications) {
-          setNotifications(cachedNotifications as Notification[]);
+          setNotifications(cachedNotifications as AppNotification[]);
           setIsLoading(false);
           return;
         } else {
@@ -214,7 +150,7 @@ export default function NotificationsScreen() {
       // Online - Try to load cached data first (for fast initial display)
       const cachedNotifications = await getCachedNotifications();
       if (cachedNotifications && !skipLoadingState) {
-        setNotifications(cachedNotifications as Notification[]);
+        setNotifications(cachedNotifications as AppNotification[]);
         setIsLoading(false); // Show cached data immediately
       }
 
@@ -231,22 +167,11 @@ export default function NotificationsScreen() {
         // If we have cached data, keep using it
         if (!cachedNotifications) {
           setIsLoading(false);
-          loadFakeNotifications();
         }
         return;
       }
 
-      // Transform database records to Notification format
-      const notifications: Notification[] = (data || []).map((record: any) => ({
-        id: record.id,
-        type: record.type as NotificationType,
-        title: record.title,
-        message: record.message,
-        isRead: record.is_read,
-        createdAt: record.created_at,
-        relatedId: record.related_id,
-        metadata: record.metadata || {},
-      }));
+      const notifications = (data || []).map(mapDbNotification);
 
       // Save to cache
       await saveNotificationsToCache(notifications);
@@ -260,104 +185,11 @@ export default function NotificationsScreen() {
       // Try to load from cache on error
       const cachedNotifications = await getCachedNotifications();
       if (cachedNotifications) {
-        setNotifications(cachedNotifications as Notification[]);
-      } else {
-        loadFakeNotifications();
+        setNotifications(cachedNotifications as AppNotification[]);
       }
     } finally {
       setIsLoading(false);
     }
-  };
-
-  const loadFakeNotifications = () => {
-    const fakeNotifications: Notification[] = [
-      // Registration Status Change - Installed (most recent)
-      {
-        id: "1",
-        type: "REGISTRATION_STATUS_CHANGE",
-        title: "Installation Completed",
-        message: "Customer 'John Doe' installation has been completed.",
-        isRead: false,
-        createdAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(), // 5 minutes ago
-        relatedId: "reg-123",
-        metadata: {
-          status: "installed",
-          customerName: "John Doe",
-          carrier: "airtel",
-        },
-      },
-      // Earnings Update
-      {
-        id: "2",
-        type: "EARNINGS_UPDATE",
-        title: "Earnings Updated",
-        message: "KSh 700 has been added to your balance from a premium installation.",
-        isRead: false,
-        createdAt: new Date(Date.now() - 15 * 60 * 1000).toISOString(), // 15 minutes ago
-        metadata: {
-          amount: 700,
-        },
-      },
-      // Registration Status Change - Rejected
-      {
-        id: "3",
-        type: "REGISTRATION_STATUS_CHANGE",
-        title: "Registration Rejected",
-        message: "Customer 'Jane Smith' registration was rejected and will not be installed.",
-        isRead: true,
-        createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), // 2 hours ago
-        relatedId: "reg-456",
-        metadata: {
-          status: "rejected",
-          customerName: "Jane Smith",
-        },
-      },
-      // Account Status Change
-      {
-        id: "4",
-        type: "ACCOUNT_STATUS_CHANGE",
-        title: "Account Approved",
-        message: "Your agent account has been approved. You can now start registering customers.",
-        isRead: true,
-        createdAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(), // 1 day ago
-      },
-      // Sync Failure
-      {
-        id: "5",
-        type: "SYNC_FAILURE",
-        title: "Sync Failed",
-        message: "Failed to sync registration for 'Mike Johnson' to Microsoft Forms. Please try again.",
-        isRead: false,
-        createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(), // 3 days ago
-        relatedId: "reg-789",
-        metadata: {
-          customerName: "Mike Johnson",
-        },
-      },
-      // System Announcement
-      {
-        id: "6",
-        type: "SYSTEM_ANNOUNCEMENT",
-        title: "System Maintenance",
-        message: "Scheduled maintenance will occur on January 15th from 2 AM to 4 AM. Services may be temporarily unavailable.",
-        isRead: true,
-        createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(), // 5 days ago
-      },
-      // More earnings
-      {
-        id: "7",
-        type: "EARNINGS_UPDATE",
-        title: "New Earnings Added",
-        message: "KSh 500 has been added to your balance from a standard installation.",
-        isRead: true,
-        createdAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(), // 7 days ago
-        metadata: {
-          amount: 500,
-        },
-      },
-    ];
-
-    setNotifications(fakeNotifications);
   };
 
   const onRefresh = async () => {
@@ -387,16 +219,7 @@ export default function NotificationsScreen() {
         return;
       }
 
-      const notifications: Notification[] = (data || []).map((record: any) => ({
-        id: record.id,
-        type: record.type as NotificationType,
-        title: record.title,
-        message: record.message,
-        isRead: record.is_read,
-        createdAt: record.created_at,
-        relatedId: record.related_id,
-        metadata: record.metadata || {},
-      }));
+      const notifications = (data || []).map(mapDbNotification);
 
       setNotifications(notifications);
 
@@ -410,8 +233,8 @@ export default function NotificationsScreen() {
   };
 
   // Helper function to automatically mark unread notifications as read
-  const markNotificationsAsRead = async (notifications: Notification[]) => {
-    const unreadNotifications = notifications.filter((n) => !n.isRead);
+  const markNotificationsAsRead = async (items: AppNotification[]) => {
+    const unreadNotifications = items.filter((n) => !n.isRead);
     if (unreadNotifications.length > 0) {
       // Small delay to ensure notifications are actually displayed
       setTimeout(async () => {
@@ -474,9 +297,7 @@ export default function NotificationsScreen() {
     }
   };
 
-  const handleNotificationPress = (notification: Notification) => {
-    // Navigate based on notification type
-    // Note: Notifications are automatically marked as read when viewed, no need to mark on click
+  const handleNotificationPress = (notification: AppNotification) => {
     switch (notification.type) {
       case "REGISTRATION_STATUS_CHANGE":
         if (notification.relatedId) {
@@ -508,86 +329,19 @@ export default function NotificationsScreen() {
       case "PAYOUT_RECEIVED":
         router.push("/earnings-history" as any);
         break;
-    }
-  };
-
-  const getNotificationIcon = (notification: Notification): string => {
-    if (notification.type === "REGISTRATION_STATUS_CHANGE") {
-      switch (notification.metadata?.status) {
-        case "installed":
-          return "✅";
-        case "rejected":
-          return "❌";
-        case "duplicate":
-          return "📋";
-        case "cancelled":
-          return "🚫";
-        default:
-          return "📄";
+      case "LEAD_OFFER": {
+        const offerId = notification.metadata?.offerId as string | undefined;
+        promptLeadOfferModal(offerId ? String(offerId) : null);
+        break;
       }
+      case "LEAD_OVERDUE":
+        if (notification.relatedId) {
+          router.push(`/lead/${notification.relatedId}` as any);
+        } else {
+          router.push("/leads" as any);
+        }
+        break;
     }
-
-    switch (notification.type) {
-      case "EARNINGS_UPDATE":
-        return "💰";
-      case "ACCOUNT_STATUS_CHANGE":
-        return "👤";
-      case "SYNC_FAILURE":
-        return "⚠️";
-      case "SYSTEM_ANNOUNCEMENT":
-        return "📢";
-      case "PAYOUT_RECEIVED":
-        return "💸";
-      default:
-        return "🔔";
-    }
-  };
-
-  const getNotificationColor = (notification: Notification): string => {
-    if (notification.type === "REGISTRATION_STATUS_CHANGE") {
-      switch (notification.metadata?.status) {
-        case "installed":
-          return "#4CAF50";
-        case "rejected":
-          return "#F44336";
-        case "duplicate":
-          return "#7B1FA2";
-        case "cancelled":
-          return "#616161";
-        default:
-          return "#FF9800";
-      }
-    }
-
-    switch (notification.type) {
-      case "EARNINGS_UPDATE":
-        return "#FF9800";
-      case "ACCOUNT_STATUS_CHANGE":
-        return "#2196F3";
-      case "SYNC_FAILURE":
-        return "#F44336";
-      case "SYSTEM_ANNOUNCEMENT":
-        return "#9C27B0";
-      case "PAYOUT_RECEIVED":
-        return "#2E7D32";
-      default:
-        return "#666666";
-    }
-  };
-
-  const formatTimeAgo = (dateString: string): string => {
-    const date = new Date(dateString);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMs / 3600000);
-    const diffDays = Math.floor(diffMs / 86400000);
-
-    if (diffMins < 1) return "Just now";
-    if (diffMins < 60) return `${diffMins}m ago`;
-    if (diffHours < 24) return `${diffHours}h ago`;
-    if (diffDays < 7) return `${diffDays}d ago`;
-    return date.toLocaleDateString();
   };
 
   const unreadCount = notifications.filter((n) => !n.isRead).length;
@@ -684,84 +438,6 @@ export default function NotificationsScreen() {
         color: "#999999",
         textAlign: "center",
       },
-      notificationCard: {
-        backgroundColor: "#FFFFFF",
-        borderRadius: scaleWidth(12),
-        padding: getResponsivePadding(),
-        marginBottom: scaleHeight(12),
-        shadowColor: "#000000",
-        shadowOffset: {
-          width: 0,
-          height: 1,
-        },
-        shadowOpacity: 0.06,
-        shadowRadius: 4,
-        elevation: 2,
-        borderWidth: 1,
-        borderColor: "#F0F0F0",
-        borderLeftWidth: 4,
-      },
-      notificationCardUnread: {
-        backgroundColor: "#F8F9FF",
-        borderLeftColor: "#0066CC",
-      },
-      notificationCardRead: {
-        borderLeftColor: "#E0E0E0",
-      },
-      notificationHeader: {
-        flexDirection: "row",
-        alignItems: "flex-start",
-        gap: scaleWidth(12),
-      },
-      notificationIconContainer: {
-        width: scaleWidth(40),
-        height: scaleWidth(40),
-        borderRadius: scaleWidth(20),
-        backgroundColor: "#F0F0F0",
-        justifyContent: "center",
-        alignItems: "center",
-      },
-      notificationIcon: {
-        fontSize: scaleFont(20),
-      },
-      notificationContent: {
-        flex: 1,
-      },
-      notificationTitle: {
-        fontSize: scaleFont(16),
-        fontFamily: "Poppins_600SemiBold",
-        color: "#333333",
-        marginBottom: scaleHeight(4),
-      },
-      notificationMessage: {
-        fontSize: scaleFont(14),
-        fontFamily: "Inter_400Regular",
-        color: "#666666",
-        lineHeight: scaleFont(20),
-        marginBottom: scaleHeight(8),
-      },
-      notificationFooter: {
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-      },
-      notificationTime: {
-        fontSize: scaleFont(12),
-        fontFamily: "Inter_400Regular",
-        color: "#999999",
-      },
-      notificationBadge: {
-        paddingHorizontal: scaleWidth(8),
-        paddingVertical: scaleHeight(4),
-        borderRadius: scaleWidth(12),
-        backgroundColor: "#0066CC",
-      },
-      notificationBadgeText: {
-        fontSize: scaleFont(10),
-        fontFamily: "Inter_600SemiBold",
-        color: "#FFFFFF",
-        textTransform: "uppercase",
-      },
     });
   };
 
@@ -843,93 +519,24 @@ export default function NotificationsScreen() {
           </View>
         ) : notifications.length === 0 ? (
           <View style={styles.emptyState}>
-            <Text style={styles.emptyStateIcon}>🔔</Text>
+            <MaterialIcons
+              name="notifications-none"
+              size={scaleWidth(56)}
+              color="#C5CAD3"
+            />
             <Text style={styles.emptyStateText}>No notifications</Text>
             <Text style={styles.emptyStateSubtext}>
               You're all caught up! New notifications will appear here.
             </Text>
           </View>
         ) : (
-          notifications.map((notification) => {
-            const iconColor = getNotificationColor(notification);
-            const isUnread = !notification.isRead;
-
-            return (
-              <TouchableOpacity
-                key={notification.id}
-                style={[
-                  styles.notificationCard,
-                  isUnread ? styles.notificationCardUnread : styles.notificationCardRead,
-                  { borderLeftColor: isUnread ? iconColor : "#E0E0E0" },
-                ]}
-                onPress={() => handleNotificationPress(notification)}
-                activeOpacity={0.7}
-              >
-                <View style={styles.notificationHeader}>
-                  <View
-                    style={[
-                      styles.notificationIconContainer,
-                      { backgroundColor: `${iconColor}15` },
-                    ]}
-                  >
-                    <Text style={styles.notificationIcon}>
-                      {getNotificationIcon(notification)}
-                    </Text>
-                  </View>
-                  <View style={styles.notificationContent}>
-                    <View
-                      style={{
-                        flexDirection: "row",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        marginBottom: scaleHeight(4),
-                      }}
-                    >
-                      <Text style={styles.notificationTitle}>
-                        {notification.title}
-                      </Text>
-                      {isUnread && (
-                        <View
-                          style={{
-                            width: scaleWidth(8),
-                            height: scaleWidth(8),
-                            borderRadius: scaleWidth(4),
-                            backgroundColor: iconColor,
-                          }}
-                        />
-                      )}
-                    </View>
-                    <Text style={styles.notificationMessage}>
-                      {notification.message}
-                    </Text>
-                    <View style={styles.notificationFooter}>
-                      <Text style={styles.notificationTime}>
-                        {formatTimeAgo(notification.createdAt)}
-                      </Text>
-                      <View
-                        style={[
-                          styles.notificationBadge,
-                          { backgroundColor: `${iconColor}20` },
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.notificationBadgeText,
-                            { color: iconColor },
-                          ]}
-                        >
-                          {notification.type
-                            .replace(/_/g, " ")
-                            .toLowerCase()
-                            .replace(/\b\w/g, (l) => l.toUpperCase())}
-                        </Text>
-                      </View>
-                    </View>
-                  </View>
-                </View>
-              </TouchableOpacity>
-            );
-          })
+          notifications.map((notification) => (
+            <NotificationCard
+              key={notification.id}
+              notification={notification}
+              onPress={handleNotificationPress}
+            />
+          ))
         )}
       </ScrollView>
     </View>

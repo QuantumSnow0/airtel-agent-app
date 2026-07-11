@@ -28,6 +28,7 @@ import { AgentAvatar } from "../../components/AgentAvatar";
 import { CommissionDonutCard } from "../../components/CommissionDonutCard";
 import { getWamTabBarOffset } from "../../components/WamTabBar";
 import { CarrierSelectModal } from "../../components/CarrierSelectModal";
+import { InboundLeadsHubCard } from "../../components/InboundLeadsHubCard";
 import { AppRatingPrompt } from "../../components/AppRatingPrompt";
 import { NotificationEnablePrompt } from "../../components/NotificationEnablePrompt";
 import { Toast } from "../../components/Toast";
@@ -45,6 +46,7 @@ import {
   shouldShowNotificationPrompt,
 } from "../../lib/notificationPromptStorage";
 import { getNotificationPermissionState } from "../../lib/services/pushNotificationService";
+import { fetchActiveOffers, fetchAssignedLeads, fetchDispatchAvailability } from "../../lib/services/leadDispatchService";
 import {
   getAgentAvatarSeed,
   getDiceBearStyleForName,
@@ -196,6 +198,9 @@ export default function DashboardScreen() {
   const [notificationPromptVisible, setNotificationPromptVisible] = useState(false);
   const [ratingPromptVisible, setRatingPromptVisible] = useState(false);
   const [isOffline, setIsOffline] = useState(false);
+  const [inboundOfferCount, setInboundOfferCount] = useState(0);
+  const [assignedLeadCount, setAssignedLeadCount] = useState(0);
+  const [leadsAvailable, setLeadsAvailable] = useState(false);
   const wasOfflineRef = useRef(false);
 
   const evaluateDashboardPrompts = async (agentStatus?: string | null) => {
@@ -256,6 +261,20 @@ export default function DashboardScreen() {
     useCallback(() => {
       if (agentData?.status === "approved") {
         void evaluateDashboardPrompts(agentData.status);
+        void (async () => {
+          const {
+            data: { user },
+          } = await supabase.auth.getUser();
+          if (!user) return;
+          const [offersRes, leadsRes, avail] = await Promise.all([
+            fetchActiveOffers(user.id),
+            fetchAssignedLeads(user.id),
+            fetchDispatchAvailability(user.id),
+          ]);
+          setInboundOfferCount(offersRes.offers.length);
+          setAssignedLeadCount(leadsRes.leads.length);
+          setLeadsAvailable(avail.isAvailable);
+        })();
       }
     }, [agentData?.status])
   );
@@ -1406,6 +1425,29 @@ export default function DashboardScreen() {
 
               <TouchableOpacity
                 style={styles.topHeaderIconBtn}
+                onPress={() => router.push("/leads" as any)}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel="Inbound leads"
+              >
+                <View style={styles.topHeaderBellWrap}>
+                  <MaterialIcons
+                    name="campaign"
+                    size={scaleWidth(24)}
+                    color="#1A1A1A"
+                  />
+                  {inboundOfferCount > 0 && (
+                    <View style={styles.topHeaderLeadBadge}>
+                      <Text style={styles.topHeaderNotifBadgeText}>
+                        {inboundOfferCount > 9 ? "9+" : inboundOfferCount}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.topHeaderIconBtn}
                 onPress={() => {
                   const currentRoute = segments[segments.length - 1];
                   if (currentRoute === "notifications") return;
@@ -1498,6 +1540,16 @@ export default function DashboardScreen() {
               </Text>
             </View>
           </View>
+
+        {isApproved ? (
+          <InboundLeadsHubCard
+            offerCount={inboundOfferCount}
+            assignedCount={assignedLeadCount}
+            isReceivingLeads={leadsAvailable}
+            onPress={() => router.push("/leads" as any)}
+            onToggleReceiving={() => router.push("/profile" as any)}
+          />
+        ) : null}
 
         <CommissionDonutCard
           totalEarningsKsh={walletDisplayKsh}
@@ -2179,6 +2231,20 @@ const createStyles = () => {
     alignItems: "center",
     justifyContent: "center",
     marginTop: 1,
+  },
+  topHeaderLeadBadge: {
+    position: "absolute",
+    top: -scaleHeight(4),
+    right: -scaleWidth(4),
+    minWidth: scaleWidth(18),
+    height: scaleWidth(18),
+    borderRadius: scaleWidth(9),
+    backgroundColor: "#E65100",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: scaleWidth(4),
+    borderWidth: 2,
+    borderColor: "#FFFFFF",
   },
   sectionHeader: {
     flexDirection: "row",

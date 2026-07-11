@@ -44,6 +44,7 @@ import InstallationDetailsStep from "../components/customer-register/Installatio
 import VisitDetailsStep from "../components/customer-register/VisitDetailsStep";
 import { registerStyles } from "../components/register/styles";
 import { CustomerRegistrationData } from "../lib/services/msFormsService";
+import { maybeAutoSubmitToMSFormsWithRetry } from "../lib/services/msFormsAutoSubmitService";
 import {
   savePendingRegistration,
   initOfflineStorage,
@@ -315,6 +316,9 @@ export default function RegisterCustomerScreen() {
       setIsOffline(!online);
 
       let dbRegistration: any = null;
+      let msSubmitResult: Awaited<
+        ReturnType<typeof maybeAutoSubmitToMSFormsWithRetry>
+      > | null = null;
 
       if (online) {
         // Step 1: Try to save to database first
@@ -344,6 +348,11 @@ export default function RegisterCustomerScreen() {
           }
 
           dbRegistration = registration;
+
+          msSubmitResult = await maybeAutoSubmitToMSFormsWithRetry(registration.id);
+          if (!msSubmitResult.ok) {
+            console.warn("MS Forms auto-submit:", msSubmitResult.error);
+          }
         } catch (dbError: any) {
           console.warn("⚠️ Database save failed, saving offline:", dbError);
           // Fall through to offline save
@@ -374,7 +383,15 @@ export default function RegisterCustomerScreen() {
       }
 
       // Success!
-      Alert.alert("Success!", "Customer registered successfully!", [
+      let successMessage = "Customer registered successfully!";
+      if (msSubmitResult?.ok && !msSubmitResult.skipped) {
+        successMessage += " Submitted to Microsoft Forms.";
+      } else if (msSubmitResult && !msSubmitResult.ok) {
+        successMessage +=
+          " Saved to cloud; MS Forms will retry when you sync or open the app.";
+      }
+
+      Alert.alert("Success!", successMessage, [
         {
           text: "OK",
           onPress: () => router.replace("/dashboard" as any),
