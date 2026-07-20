@@ -1,7 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
+  Linking,
+  Modal,
+  Platform,
+  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -24,18 +29,58 @@ import {
 } from "@expo-google-fonts/inter";
 import { supabase } from "../../lib/supabase";
 import { fetchInboundLeadById } from "../../lib/dispatch/leadDetailService";
-import type { InboundLead } from "../../lib/dispatch/types";
+import type {
+  InboundLead,
+  LeadOutcomeAction,
+} from "../../lib/dispatch/types";
 import {
   LEAD_STATUS_COLORS,
   formatLeadStatusLabel,
 } from "../../constants/leadStatuses";
-import { openAirtelConnectForKyc } from "../../lib/services/airtelConnectLauncher";
-import { submitLeadOutcome } from "../../lib/services/leadOutcomeService";
+import {
+  releaseReasonLabel,
+  submitLeadOutcome,
+} from "../../lib/services/leadOutcomeService";
+import {
+  sendLeadContactOtp,
+  verifyLeadContactOtp,
+} from "../../lib/services/leadContactOtpService";
+import {
+  LEAD_INSTALL_COMMISSION_KES,
+  getLeadInstallCommissionKes,
+} from "../../lib/commissions/leadInstallCommission";
 import {
   scaleFont,
   scaleHeight,
   scaleWidth,
 } from "../../lib/utils/responsive";
+
+const RELEASE_REASONS: {
+  action: Extract<LeadOutcomeAction, "unreachable" | "declined" | "kyc_failed" | "release">;
+  title: string;
+  description: string;
+}[] = [
+  {
+    action: "unreachable",
+    title: "Customer unreachable",
+    description: "No answer / wrong number / cannot reach customer",
+  },
+  {
+    action: "declined",
+    title: "Customer declined",
+    description: "Customer no longer wants the service",
+  },
+  {
+    action: "kyc_failed",
+    title: "KYC / registration failed",
+    description: "Could not complete KYC or signup",
+  },
+  {
+    action: "release",
+    title: "Cannot complete",
+    description: "Other reason — add a short note below",
+  },
+];
 
 function DetailRow({ label, value }: { label: string; value?: string | null }) {
   if (!value) return null;
@@ -58,6 +103,17 @@ export default function InboundLeadDetailScreen() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [srNumber, setSrNumber] = useState("");
   const [imei, setImei] = useState("");
+  const [callInitiated, setCallInitiated] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpCode, setOtpCode] = useState("");
+  const [otpMaskedPhone, setOtpMaskedPhone] = useState("");
+  const [otpLoading, setOtpLoading] = useState<"send" | "verify" | null>(null);
+  const [releaseOpen, setReleaseOpen] = useState(false);
+  const [releaseReason, setReleaseReason] = useState<
+    (typeof RELEASE_REASONS)[number]["action"] | null
+  >(null);
+  const [releaseNotes, setReleaseNotes] = useState("");
+  const scrollRef = useRef<ScrollView>(null);
 
   const [fontsLoaded] = useFonts({
     Poppins_600SemiBold,
@@ -66,6 +122,14 @@ export default function InboundLeadDetailScreen() {
     Inter_500Medium,
     Inter_600SemiBold,
   });
+
+  const applyLead = useCallback((next: InboundLead) => {
+    setError(null);
+    setLead(next);
+    setSrNumber(next.airtel_sr_number ?? "");
+    setImei(next.safaricom_imei ?? "");
+    setCallInitiated(Boolean(next.call_initiated_at));
+  }, []);
 
   const loadLead = useCallback(async () => {
     if (!id) return;
@@ -81,16 +145,41 @@ export default function InboundLeadDetailScreen() {
       setError(result.error ?? "Lead not found");
       setLead(null);
     } else {
-      setError(null);
-      setLead(result.lead);
-      setSrNumber(result.lead.airtel_sr_number ?? "");
-      setImei(result.lead.safaricom_imei ?? "");
+      applyLead(result.lead);
     }
-  }, [id, router]);
+  }, [applyLead, id, router]);
 
   useEffect(() => {
     loadLead().finally(() => setLoading(false));
   }, [loadLead]);
+
+  // Live status / field updates while this screen is open.
+  useEffect(() => {
+    if (!id) return;
+
+    const channel = supabase
+      .channel(`inbound-lead-detail-${id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "inbound_leads",
+          filter: `id=eq.${id}`,
+        },
+        (payload) => {
+          // Release / unassign appears as DELETE under RLS — keep UI until navigate.
+          if (payload.eventType === "DELETE") return;
+          const row = payload.new as InboundLead | null;
+          if (row?.id) applyLead(row);
+        },
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [applyLead, id]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -99,8 +188,8 @@ export default function InboundLeadDetailScreen() {
   };
 
   const runOutcome = async (
-    action: Parameters<typeof submitLeadOutcome>[0]["action"],
-    extra?: { airtelSrNumber?: string; safaricomImei?: string },
+    action: LeadOutcomeAction,
+    extra?: { airtelSrNumber?: string; safaricomImei?: string; notes?: string },
   ) => {
     if (!lead) return;
     setActionLoading(action);
@@ -114,17 +203,165 @@ export default function InboundLeadDetailScreen() {
       Alert.alert("Error", result.error ?? "Action failed");
       return;
     }
+
+    const isRelease =
+      action === "release" ||
+      action === "unreachable" ||
+      action === "declined" ||
+      action === "kyc_failed";
+
+    if (isRelease) {
+      setReleaseOpen(false);
+      setReleaseReason(null);
+      setReleaseNotes("");
+      // Do not re-fetch: release clears assigned_agent_id so RLS returns "not found".
+      const reasonText = releaseReasonLabel(result.releaseReason ?? action);
+      Alert.alert("Lead released", reasonText, [
+        { text: "OK", onPress: () => router.back() },
+      ]);
+      return;
+    }
+
+    if (result.status) {
+      setLead((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: result.status as InboundLead["status"],
+              ...(extra?.airtelSrNumber
+                ? { airtel_sr_number: extra.airtelSrNumber }
+                : {}),
+              ...(extra?.safaricomImei
+                ? { safaricom_imei: extra.safaricomImei }
+                : {}),
+              ...(result.commissionKes != null
+                ? { commission_earned_ksh: result.commissionKes }
+                : {}),
+            }
+          : prev,
+      );
+    }
     await loadLead();
-    if (action === "release" || action === "unreachable" || action === "declined" || action === "kyc_failed") {
-      Alert.alert("Lead released", "This lead will be offered to another agent.");
-      router.back();
+
+    if (action === "installed") {
+      Alert.alert(
+        "Install submitted",
+        "Admin will review the proof and confirm. Commission is paid with your other payouts.",
+      );
+      return;
     }
   };
 
-  const handleOpenAirtelConnect = async () => {
+  const confirmRelease = () => {
+    if (!releaseReason) {
+      Alert.alert("Choose a reason", "Select why you are releasing this lead.");
+      return;
+    }
+    if (releaseReason === "release" && !releaseNotes.trim()) {
+      Alert.alert("Add a note", "Please briefly explain why you cannot complete this lead.");
+      return;
+    }
+    void runOutcome(releaseReason, { notes: releaseNotes.trim() || undefined });
+  };
+
+  const formatDialablePhone = (value: string): string => {
+    const digits = value.replace(/\D/g, "");
+    if (digits.startsWith("254")) return `+${digits}`;
+    if (digits.startsWith("0")) return `+254${digits.slice(1)}`;
+    if (digits.startsWith("7") || digits.startsWith("1")) return `+254${digits}`;
+    return value.startsWith("+") ? value : `+${digits}`;
+  };
+
+  const handleCallCustomer = async () => {
     if (!lead) return;
-    await runOutcome("kyc_started");
-    await openAirtelConnectForKyc(lead.id);
+    // Mark call intent first so OTP unlocks even if the dialer check fails
+    // (Android 11+ canOpenURL is unreliable for tel: without package queries).
+    setCallInitiated(true);
+    void runOutcome("call_started");
+
+    const dialPhone = formatDialablePhone(lead.primary_phone);
+    try {
+      await Linking.openURL(`tel:${dialPhone}`);
+    } catch {
+      Alert.alert(
+        "Call customer",
+        `Open your phone app and dial ${dialPhone}`,
+      );
+    }
+  };
+
+  const handleSendOtp = async () => {
+    if (!lead) return;
+    if (!callInitiated) {
+    Alert.alert(
+      "Call the customer first",
+      "Use Call customer, speak to them, then send the confirmation code.",
+    );
+      return;
+    }
+
+    setOtpLoading("send");
+    const result = await sendLeadContactOtp(lead.id);
+    setOtpLoading(null);
+    if (!result.success) {
+      Alert.alert("Code not sent", result.error);
+      return;
+    }
+    if (result.alreadyVerified) {
+      await loadLead();
+      return;
+    }
+
+    setOtpSent(true);
+    setOtpMaskedPhone(result.maskedPhone ?? "");
+    setOtpCode("");
+    Alert.alert(
+      "Confirmation code sent",
+      `Ask the customer for the 6-digit code sent to ${
+        result.maskedPhone || "their phone"
+      }.`,
+    );
+  };
+
+  const handleVerifyOtp = async () => {
+    if (!lead) return;
+    if (!/^\d{6}$/.test(otpCode)) {
+      Alert.alert(
+        "Enter the code",
+        "Enter the 6-digit contact confirmation code from the customer.",
+      );
+      return;
+    }
+
+    setOtpLoading("verify");
+    const result = await verifyLeadContactOtp(lead.id, otpCode);
+    setOtpLoading(null);
+    if (!result.success) {
+      Alert.alert("Verification failed", result.error);
+      return;
+    }
+
+    setOtpCode("");
+    setOtpSent(false);
+    await loadLead();
+    Alert.alert(
+      "Contact confirmed",
+      "You can now review and submit the prefilled registration.",
+    );
+  };
+
+  const handleOpenLeadRegistration = () => {
+    if (!lead?.contact_verified_at) {
+      Alert.alert(
+        "Confirm contact first",
+        "Call the customer and enter their contact confirmation code.",
+      );
+      return;
+    }
+    router.push({
+      pathname: "/register-customer",
+      params: { leadId: lead.id },
+    } as any);
   };
 
   const handleMarkInstalled = () => {
@@ -152,7 +389,20 @@ export default function InboundLeadDetailScreen() {
     LEAD_STATUS_COLORS[lead?.status ?? "assigned"] ??
     LEAD_STATUS_COLORS.assigned;
 
-  const isTerminal = lead?.status === "installed";
+  const isTerminal =
+    lead?.status === "installed" || lead?.status === "pending_install";
+  const awaitingAdminConfirm = lead?.status === "pending_install";
+  const airtelRegistrationComplete =
+    lead?.product === "airtel" &&
+    (lead.status === "kyc_completed" ||
+      lead.status === "pending_install" ||
+      lead.status === "installed");
+
+  const scrollProofFieldIntoView = () => {
+    setTimeout(() => {
+      scrollRef.current?.scrollToEnd({ animated: true });
+    }, 150);
+  };
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -164,10 +414,18 @@ export default function InboundLeadDetailScreen() {
         <View style={styles.headerSpacer} />
       </View>
 
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        keyboardVerticalOffset={Platform.OS === "ios" ? insets.top + 56 : 0}
+      >
       <ScrollView
+        ref={scrollRef}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
         contentContainerStyle={[
           styles.content,
-          { paddingBottom: insets.bottom + 24 },
+          { paddingBottom: insets.bottom + 120 },
         ]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
@@ -234,23 +492,117 @@ export default function InboundLeadDetailScreen() {
                   <>
                     <TouchableOpacity
                       style={styles.primaryBtn}
-                      onPress={handleOpenAirtelConnect}
-                      disabled={!!actionLoading}
+                      onPress={handleCallCustomer}
+                      disabled={!!actionLoading || !!otpLoading}
                     >
                       <Text style={styles.primaryBtnText}>
-                        Open Airtel Connect for KYC
+                        Call customer
                       </Text>
                     </TouchableOpacity>
 
-                    <TouchableOpacity
-                      style={styles.secondaryBtn}
-                      onPress={() => runOutcome("kyc_completed")}
-                      disabled={!!actionLoading}
-                    >
-                      <Text style={styles.secondaryBtnText}>
-                        Mark KYC completed
-                      </Text>
-                    </TouchableOpacity>
+                    {lead.contact_verified_at ? (
+                      <View style={styles.verifiedCard}>
+                        <Text style={styles.verifiedTitle}>
+                          ✓ Customer contact confirmed
+                        </Text>
+                        <Text style={styles.verifiedText}>
+                          Verified by SMS code{" "}
+                          {new Date(lead.contact_verified_at).toLocaleString()}.
+                        </Text>
+                      </View>
+                    ) : (
+                      <View style={styles.otpCard}>
+                        <Text style={styles.otpTitle}>
+                          Confirm customer contact
+                        </Text>
+                        <Text style={styles.otpHelp}>
+                          While speaking to the customer, send a confirmation
+                          code and enter the 6 digits they give you.
+                        </Text>
+                        <TouchableOpacity
+                          style={[
+                            styles.secondaryBtn,
+                            (!callInitiated || !!otpLoading) && styles.disabledBtn,
+                          ]}
+                          onPress={handleSendOtp}
+                          disabled={!callInitiated || !!otpLoading}
+                        >
+                          {otpLoading === "send" ? (
+                            <ActivityIndicator color="#0066CC" />
+                          ) : (
+                            <Text style={styles.secondaryBtnText}>
+                              {otpSent
+                                ? "Resend confirmation code"
+                                : "Send confirmation code"}
+                            </Text>
+                          )}
+                        </TouchableOpacity>
+
+                        {otpSent ? (
+                          <>
+                            <Text style={styles.otpSentText}>
+                              Confirmation code sent to{" "}
+                              {otpMaskedPhone || "customer"}
+                            </Text>
+                            <TextInput
+                              style={styles.otpInput}
+                              value={otpCode}
+                              onChangeText={(value) =>
+                                setOtpCode(value.replace(/\D/g, "").slice(0, 6))
+                              }
+                              placeholder="6-digit confirmation code"
+                              placeholderTextColor="#999"
+                              keyboardType="number-pad"
+                              maxLength={6}
+                              textAlign="center"
+                            />
+                            <TouchableOpacity
+                              style={[
+                                styles.verifyBtn,
+                                (otpCode.length !== 6 || !!otpLoading) &&
+                                  styles.disabledBtn,
+                              ]}
+                              onPress={handleVerifyOtp}
+                              disabled={otpCode.length !== 6 || !!otpLoading}
+                            >
+                              {otpLoading === "verify" ? (
+                                <ActivityIndicator color="#FFFFFF" />
+                              ) : (
+                                <Text style={styles.verifyBtnText}>
+                                  Confirm code
+                                </Text>
+                              )}
+                            </TouchableOpacity>
+                          </>
+                        ) : null}
+                      </View>
+                    )}
+
+                    {!airtelRegistrationComplete ? (
+                      <TouchableOpacity
+                        style={[
+                          styles.registrationBtn,
+                          !lead.contact_verified_at && styles.disabledBtn,
+                        ]}
+                        onPress={handleOpenLeadRegistration}
+                        disabled={!lead.contact_verified_at || !!actionLoading}
+                      >
+                        <Text style={styles.registrationBtnText}>
+                          {lead.registration_id
+                            ? "Resubmit registration"
+                            : "Review and submit registration"}
+                        </Text>
+                      </TouchableOpacity>
+                    ) : (
+                      <View style={styles.registrationDoneCard}>
+                        <Text style={styles.registrationDoneTitle}>
+                          ✓ Registration submitted
+                        </Text>
+                        <Text style={styles.verifiedText}>
+                          Customer registration completed successfully.
+                        </Text>
+                      </View>
+                    )}
                   </>
                 )}
 
@@ -264,7 +616,7 @@ export default function InboundLeadDetailScreen() {
                   </TouchableOpacity>
                 )}
 
-                {lead.product === "airtel" ? (
+                {lead.product === "airtel" && airtelRegistrationComplete ? (
                   <View style={styles.proofField}>
                     <Text style={styles.proofLabel}>Airtel SR number (for install)</Text>
                     <TextInput
@@ -273,9 +625,13 @@ export default function InboundLeadDetailScreen() {
                       onChangeText={setSrNumber}
                       placeholder="Enter SR number"
                       placeholderTextColor="#999"
+                      onFocus={scrollProofFieldIntoView}
+                      returnKeyType="done"
+                      autoCapitalize="characters"
+                      blurOnSubmit
                     />
                   </View>
-                ) : (
+                ) : lead.product === "safaricom" ? (
                   <View style={styles.proofField}>
                     <Text style={styles.proofLabel}>Device IMEI (for install)</Text>
                     <TextInput
@@ -284,41 +640,33 @@ export default function InboundLeadDetailScreen() {
                       onChangeText={setImei}
                       placeholder="Enter IMEI"
                       placeholderTextColor="#999"
+                      onFocus={scrollProofFieldIntoView}
+                      returnKeyType="done"
+                      keyboardType="number-pad"
+                      blurOnSubmit
                     />
                   </View>
+                ) : null}
+
+                {(lead.product === "safaricom" || airtelRegistrationComplete) && (
+                  <TouchableOpacity
+                    style={styles.installBtn}
+                    onPress={handleMarkInstalled}
+                    disabled={!!actionLoading}
+                  >
+                    <Text style={styles.installBtnText}>
+                      Submit install for review
+                    </Text>
+                  </TouchableOpacity>
                 )}
 
                 <TouchableOpacity
-                  style={styles.installBtn}
-                  onPress={handleMarkInstalled}
-                  disabled={!!actionLoading}
-                >
-                  <Text style={styles.installBtnText}>Mark installed</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
                   style={styles.dangerBtn}
-                  onPress={() =>
-                    Alert.alert(
-                      "Release lead",
-                      "Customer unreachable or KYC failed?",
-                      [
-                        { text: "Cancel", style: "cancel" },
-                        {
-                          text: "Unreachable",
-                          onPress: () => runOutcome("unreachable"),
-                        },
-                        {
-                          text: "Customer declined",
-                          onPress: () => runOutcome("declined"),
-                        },
-                        {
-                          text: "KYC failed",
-                          onPress: () => runOutcome("kyc_failed"),
-                        },
-                      ],
-                    )
-                  }
+                  onPress={() => {
+                    setReleaseReason(null);
+                    setReleaseNotes("");
+                    setReleaseOpen(true);
+                  }}
                   disabled={!!actionLoading}
                 >
                   <Text style={styles.dangerBtnText}>Release / report issue</Text>
@@ -326,11 +674,28 @@ export default function InboundLeadDetailScreen() {
               </View>
             )}
 
-            {lead.status === "installed" && (
+            {awaitingAdminConfirm && (
               <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Install proof</Text>
+                <Text style={styles.sectionTitle}>Install submitted</Text>
                 <DetailRow label="SR number" value={lead.airtel_sr_number} />
                 <DetailRow label="IMEI" value={lead.safaricom_imei} />
+                <Text style={styles.awaitingText}>
+                  Waiting for admin to confirm. If approved, KSh{" "}
+                  {LEAD_INSTALL_COMMISSION_KES} will be added to your earnings
+                  and paid with your normal payouts.
+                </Text>
+              </View>
+            )}
+
+            {lead.status === "installed" && (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Install confirmed</Text>
+                <DetailRow label="SR number" value={lead.airtel_sr_number} />
+                <DetailRow label="IMEI" value={lead.safaricom_imei} />
+                <DetailRow
+                  label="Commission"
+                  value={`KSh ${getLeadInstallCommissionKes(lead).toLocaleString()} (via admin payouts)`}
+                />
                 <DetailRow
                   label="Installed at"
                   value={
@@ -344,12 +709,110 @@ export default function InboundLeadDetailScreen() {
           </>
         ) : null}
       </ScrollView>
+      </KeyboardAvoidingView>
+
+      <Modal
+        visible={releaseOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setReleaseOpen(false)}
+      >
+        <Pressable
+          style={styles.releaseBackdrop}
+          onPress={() => setReleaseOpen(false)}
+        >
+          <Pressable
+            style={[
+              styles.releaseSheet,
+              { paddingBottom: Math.max(insets.bottom, 16) },
+            ]}
+            onPress={(e) => e.stopPropagation()}
+          >
+            <View style={styles.releaseHandle} />
+            <Text style={styles.releaseTitle}>Release this lead</Text>
+            <Text style={styles.releaseSubtitle}>
+              Choose why you cannot complete it. The lead will leave your list
+              and go to another agent or admin.
+            </Text>
+
+            {RELEASE_REASONS.map((option) => {
+              const selected = releaseReason === option.action;
+              return (
+                <TouchableOpacity
+                  key={option.action}
+                  style={[
+                    styles.releaseOption,
+                    selected && styles.releaseOptionSelected,
+                  ]}
+                  onPress={() => setReleaseReason(option.action)}
+                  activeOpacity={0.85}
+                >
+                  <View
+                    style={[
+                      styles.releaseRadio,
+                      selected && styles.releaseRadioSelected,
+                    ]}
+                  >
+                    {selected ? <View style={styles.releaseRadioDot} /> : null}
+                  </View>
+                  <View style={styles.releaseOptionText}>
+                    <Text style={styles.releaseOptionTitle}>{option.title}</Text>
+                    <Text style={styles.releaseOptionDesc}>
+                      {option.description}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+
+            <Text style={styles.releaseNotesLabel}>Notes (optional)</Text>
+            <TextInput
+              style={styles.releaseNotesInput}
+              value={releaseNotes}
+              onChangeText={setReleaseNotes}
+              placeholder={
+                releaseReason === "release"
+                  ? "Required — briefly say what went wrong"
+                  : "Optional detail for admin"
+              }
+              placeholderTextColor="#999"
+              multiline
+              textAlignVertical="top"
+            />
+
+            <TouchableOpacity
+              style={[
+                styles.releaseConfirmBtn,
+                (!releaseReason || !!actionLoading) &&
+                  styles.releaseConfirmBtnDisabled,
+              ]}
+              onPress={confirmRelease}
+              disabled={!releaseReason || !!actionLoading}
+            >
+              {actionLoading ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <Text style={styles.releaseConfirmText}>Confirm release</Text>
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.releaseCancelBtn}
+              onPress={() => setReleaseOpen(false)}
+              disabled={!!actionLoading}
+            >
+              <Text style={styles.releaseCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F5F7FA" },
+  flex: { flex: 1 },
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -417,6 +880,13 @@ const styles = StyleSheet.create({
     color: "#1A1A1A",
     marginBottom: scaleHeight(12),
   },
+  awaitingText: {
+    fontSize: scaleFont(13),
+    fontFamily: "Inter_400Regular",
+    color: "#666666",
+    lineHeight: scaleFont(18),
+    marginTop: scaleHeight(4),
+  },
   detailRow: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -466,6 +936,106 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_600SemiBold",
     fontSize: scaleFont(14),
   },
+  disabledBtn: {
+    opacity: 0.45,
+  },
+  otpCard: {
+    backgroundColor: "#F5F9FF",
+    borderRadius: scaleWidth(12),
+    borderWidth: 1,
+    borderColor: "#D7E8FA",
+    padding: scaleWidth(12),
+    marginBottom: scaleHeight(10),
+  },
+  otpTitle: {
+    fontSize: scaleFont(14),
+    fontFamily: "Inter_600SemiBold",
+    color: "#1A1A1A",
+    marginBottom: scaleHeight(4),
+  },
+  otpHelp: {
+    fontSize: scaleFont(12),
+    fontFamily: "Inter_400Regular",
+    color: "#666666",
+    lineHeight: scaleFont(18),
+    marginBottom: scaleHeight(10),
+  },
+  otpSentText: {
+    fontSize: scaleFont(12),
+    fontFamily: "Inter_500Medium",
+    color: "#0066CC",
+    textAlign: "center",
+    marginBottom: scaleHeight(8),
+  },
+  otpInput: {
+    borderWidth: 1,
+    borderColor: "#B8D2EC",
+    borderRadius: scaleWidth(10),
+    backgroundColor: "#FFFFFF",
+    color: "#1A1A1A",
+    fontFamily: "Poppins_600SemiBold",
+    fontSize: scaleFont(20),
+    letterSpacing: scaleWidth(5),
+    paddingVertical: scaleHeight(10),
+    marginBottom: scaleHeight(8),
+  },
+  verifyBtn: {
+    backgroundColor: "#0066CC",
+    borderRadius: scaleWidth(10),
+    paddingVertical: scaleHeight(12),
+    alignItems: "center",
+  },
+  verifyBtnText: {
+    color: "#FFFFFF",
+    fontFamily: "Inter_600SemiBold",
+    fontSize: scaleFont(14),
+  },
+  verifiedCard: {
+    backgroundColor: "#EAF7ED",
+    borderRadius: scaleWidth(12),
+    borderWidth: 1,
+    borderColor: "#B9E1C2",
+    padding: scaleWidth(12),
+    marginBottom: scaleHeight(10),
+  },
+  verifiedTitle: {
+    color: "#1B5E20",
+    fontFamily: "Inter_600SemiBold",
+    fontSize: scaleFont(14),
+    marginBottom: scaleHeight(3),
+  },
+  verifiedText: {
+    color: "#4E6652",
+    fontFamily: "Inter_400Regular",
+    fontSize: scaleFont(12),
+    lineHeight: scaleFont(17),
+  },
+  registrationBtn: {
+    backgroundColor: "#7B1FA2",
+    borderRadius: scaleWidth(12),
+    paddingVertical: scaleHeight(14),
+    alignItems: "center",
+    marginBottom: scaleHeight(10),
+  },
+  registrationBtnText: {
+    color: "#FFFFFF",
+    fontFamily: "Poppins_600SemiBold",
+    fontSize: scaleFont(14),
+  },
+  registrationDoneCard: {
+    backgroundColor: "#F2EAF8",
+    borderRadius: scaleWidth(12),
+    borderWidth: 1,
+    borderColor: "#D7BDE5",
+    padding: scaleWidth(12),
+    marginBottom: scaleHeight(10),
+  },
+  registrationDoneTitle: {
+    color: "#6A1B9A",
+    fontFamily: "Inter_600SemiBold",
+    fontSize: scaleFont(14),
+    marginBottom: scaleHeight(3),
+  },
   proofField: { marginBottom: scaleHeight(12) },
   proofLabel: {
     fontSize: scaleFont(13),
@@ -502,6 +1072,129 @@ const styles = StyleSheet.create({
   },
   dangerBtnText: {
     color: "#C62828",
+    fontFamily: "Inter_500Medium",
+    fontSize: scaleFont(14),
+  },
+  releaseBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    justifyContent: "flex-end",
+  },
+  releaseSheet: {
+    backgroundColor: "#FFFFFF",
+    borderTopLeftRadius: scaleWidth(20),
+    borderTopRightRadius: scaleWidth(20),
+    paddingHorizontal: scaleWidth(18),
+    paddingTop: scaleHeight(10),
+  },
+  releaseHandle: {
+    alignSelf: "center",
+    width: scaleWidth(40),
+    height: scaleHeight(4),
+    borderRadius: 2,
+    backgroundColor: "#DDDDDD",
+    marginBottom: scaleHeight(12),
+  },
+  releaseTitle: {
+    fontSize: scaleFont(18),
+    fontFamily: "Poppins_600SemiBold",
+    color: "#1A1A1A",
+    marginBottom: scaleHeight(4),
+  },
+  releaseSubtitle: {
+    fontSize: scaleFont(13),
+    fontFamily: "Inter_400Regular",
+    color: "#666666",
+    lineHeight: scaleFont(18),
+    marginBottom: scaleHeight(14),
+  },
+  releaseOption: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: scaleWidth(12),
+    borderWidth: 1,
+    borderColor: "#E5E5E5",
+    borderRadius: scaleWidth(12),
+    padding: scaleWidth(12),
+    marginBottom: scaleHeight(8),
+    backgroundColor: "#FAFAFA",
+  },
+  releaseOptionSelected: {
+    borderColor: "#C62828",
+    backgroundColor: "#FFF5F5",
+  },
+  releaseRadio: {
+    width: scaleWidth(20),
+    height: scaleWidth(20),
+    borderRadius: scaleWidth(10),
+    borderWidth: 2,
+    borderColor: "#BBBBBB",
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 2,
+  },
+  releaseRadioSelected: {
+    borderColor: "#C62828",
+  },
+  releaseRadioDot: {
+    width: scaleWidth(10),
+    height: scaleWidth(10),
+    borderRadius: scaleWidth(5),
+    backgroundColor: "#C62828",
+  },
+  releaseOptionText: { flex: 1 },
+  releaseOptionTitle: {
+    fontSize: scaleFont(14),
+    fontFamily: "Inter_600SemiBold",
+    color: "#1A1A1A",
+  },
+  releaseOptionDesc: {
+    fontSize: scaleFont(12),
+    fontFamily: "Inter_400Regular",
+    color: "#666666",
+    marginTop: 2,
+  },
+  releaseNotesLabel: {
+    fontSize: scaleFont(13),
+    fontFamily: "Inter_500Medium",
+    color: "#444444",
+    marginTop: scaleHeight(8),
+    marginBottom: scaleHeight(6),
+  },
+  releaseNotesInput: {
+    minHeight: scaleHeight(72),
+    borderWidth: 1,
+    borderColor: "#DDDDDD",
+    borderRadius: scaleWidth(10),
+    paddingHorizontal: scaleWidth(12),
+    paddingVertical: scaleHeight(10),
+    fontFamily: "Inter_400Regular",
+    fontSize: scaleFont(14),
+    color: "#1A1A1A",
+    backgroundColor: "#FAFAFA",
+    marginBottom: scaleHeight(14),
+  },
+  releaseConfirmBtn: {
+    backgroundColor: "#C62828",
+    borderRadius: scaleWidth(12),
+    paddingVertical: scaleHeight(14),
+    alignItems: "center",
+    marginBottom: scaleHeight(8),
+  },
+  releaseConfirmBtnDisabled: {
+    opacity: 0.5,
+  },
+  releaseConfirmText: {
+    color: "#FFFFFF",
+    fontFamily: "Poppins_600SemiBold",
+    fontSize: scaleFont(15),
+  },
+  releaseCancelBtn: {
+    alignItems: "center",
+    paddingVertical: scaleHeight(10),
+  },
+  releaseCancelText: {
+    color: "#666666",
     fontFamily: "Inter_500Medium",
     fontSize: scaleFont(14),
   },

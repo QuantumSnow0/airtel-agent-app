@@ -9,7 +9,7 @@ import {
   getResponsivePadding,
 } from "../lib/utils/responsive";
 import { useEffect, useState } from "react";
-import { supabase } from "../lib/supabase";
+import { AFFILIATION_DISCLAIMER } from "../constants/legal";
 import {
   Poppins_600SemiBold,
   Poppins_700Bold,
@@ -65,7 +65,7 @@ export default function WelcomeScreen() {
         {/* Content Section */}
         <View style={styles.contentContainer}>
           <Text style={styles.subtitle}>
-            Register customers for 5G SmartConnect
+            Register customers for home internet services
           </Text>
 
           <Text style={styles.description}>
@@ -73,6 +73,7 @@ export default function WelcomeScreen() {
             Register customers on the go and earn commission for successful
             installations.
           </Text>
+          <Text style={styles.disclaimer}>{AFFILIATION_DISCLAIMER}</Text>
         </View>
       </ScrollView>
 
@@ -156,6 +157,15 @@ const styles = StyleSheet.create({
     lineHeight: 24,
     paddingHorizontal: 20,
     letterSpacing: 0.2,
+  },
+  disclaimer: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    color: "#888888",
+    textAlign: "center",
+    lineHeight: 18,
+    paddingHorizontal: 16,
+    marginTop: 16,
   },
   buttonContainer: {
     paddingHorizontal: 24,

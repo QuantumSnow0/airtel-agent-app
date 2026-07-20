@@ -20,7 +20,7 @@ export const HELP_FAQS = [
   {
     question: "Why did sync fail?",
     answer:
-      "Airtel registrations sync to Microsoft Forms when online. Open Records, tap the registration, and use Sync if needed. Check your internet connection.",
+      "Airtel registrations are submitted to the carrier workflow when online. Open Records, tap the registration, and use Sync if needed. Check your internet connection.",
   },
   {
     question: "How are earnings calculated?",

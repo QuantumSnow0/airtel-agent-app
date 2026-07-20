@@ -91,10 +91,17 @@ export default function HelpScreen() {
             <Text style={styles.linkArrow}>›</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.linkRow, styles.linkRowLast]}
+            style={styles.linkRow}
             onPress={() => router.push("/notifications" as any)}
           >
             <Text style={styles.linkText}>Notifications</Text>
+            <Text style={styles.linkArrow}>›</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.linkRow, styles.linkRowLast]}
+            onPress={() => router.push("/privacy-policy" as any)}
+          >
+            <Text style={styles.linkText}>Privacy policy</Text>
             <Text style={styles.linkArrow}>›</Text>
           </TouchableOpacity>
         </View>

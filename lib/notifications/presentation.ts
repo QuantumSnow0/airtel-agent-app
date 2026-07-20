@@ -1,5 +1,6 @@
 import type { MaterialIcons } from "@expo/vector-icons";
 import type { AppNotification, NotificationType } from "./types";
+import { formatLeadOfferPushDisplay as formatLeadOfferCopy } from "./leadOfferCopy";
 
 type IconName = keyof typeof MaterialIcons.glyphMap;
 
@@ -98,12 +99,6 @@ const REGISTRATION_STATUS_VISUALS: Record<string, Partial<NotificationVisual>> =
   },
 };
 
-function capitalizeBrand(product: string): string {
-  if (product === "safaricom") return "Safaricom";
-  if (product === "airtel") return "Airtel";
-  return product.charAt(0).toUpperCase() + product.slice(1);
-}
-
 /** Enrich stored DB copy for lead-offer cards (older rows may have generic text). */
 export function formatNotificationDisplay(
   notification: AppNotification,
@@ -113,25 +108,11 @@ export function formatNotificationDisplay(
       string,
       unknown
     >;
-    const product = String(preview.product ?? "lead");
-    const brand = capitalizeBrand(product);
-    const town = String(preview.installationTown ?? "your area");
-    const distance =
-      preview.distanceKm != null ? `~${preview.distanceKm} km` : null;
-    const pkg = preview.packageLabel ? String(preview.packageLabel) : null;
-    const area = preview.roughArea ? String(preview.roughArea) : null;
+    const { title, message, subtitle } = formatLeadOfferCopy(
+      preview as Record<string, unknown>,
+    );
 
-    const subtitle = [distance, pkg].filter(Boolean).join(" · ") || undefined;
-    const location = [town, area].filter(Boolean).join(" · ");
-
-    return {
-      title: `${brand} lead · ${town}`,
-      subtitle,
-      message:
-        subtitle != null
-          ? `${location} — ${subtitle}. Accept or decline before the timer ends.`
-          : `New ${brand} customer in ${location}. Tap to respond before the offer expires.`,
-    };
+    return { title, message, subtitle };
   }
 
   if (notification.type === "LEAD_OVERDUE") {

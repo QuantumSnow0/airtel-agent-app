@@ -3,30 +3,55 @@
  *
  * Three layers — do not rely on push alone:
  *   1. Supabase Realtime (`lead_offers` INSERT) → modal + in-app sound (primary, app open)
- *   2. Supabase Realtime (`notifications` INSERT) → backup OS banner + sound (app background)
- *   3. Expo push webhook → backup when realtime socket is down / app killed
+ *   2. Expo push (`send-push-notification`) → OS banner + sound (background / killed)
+ *
+ * Do not also present a local OS notification on `notifications` INSERT for LEAD_OFFER —
+ * that duplicates the Expo push when the Realtime socket is still alive in background.
  *
  * Foreground: modal + playLeadOfferAlert() — no duplicate OS banner.
- * Background: dedicated Android channel `wam_lead_offers` with custom sound.
+ * Background: hybrid FCM (sound + plain banner) + delayed Realtime rich upgrade (buttons).
  */
 
 import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
-import { AppState, Linking, Platform } from "react-native";
+import { Linking, AppState, Platform } from "react-native";
+import "../notifications/leadOfferBackgroundTask";
+import { registerLeadOfferBackgroundNotificationTask } from "../notifications/leadOfferBackgroundTask";
 import { supabase } from "../supabase";
 import {
   extractOfferIdFromPushData,
   isLeadOfferNotificationData,
   promptLeadOfferModal,
 } from "../dispatch/leadOfferBridge";
-import { LEAD_OFFER_SOUND_FILENAME } from "../config/leadAlertConfig";
+import {
+  ANDROID_LEAD_OFFER_CHANNEL_ID,
+  PUSH_LEAD_OFFER_SOUND_FILENAME,
+} from "../config/leadAlertConfig";
+import { presentLeadOfferOsNotification } from "../notifications/presentLeadOfferOsNotification";
+import { requestRichLeadOfferUpgrade } from "../notifications/leadOfferUpgradeService";
+import { ensureAndroidLeadOfferChannel } from "../notifications/leadOfferChannel";
+import { leadOfferNotificationTag } from "../notifications/leadOfferCopy";
 import {
   formatNotificationDisplay,
   mapDbNotification,
 } from "../notifications/presentation";
+import { ensureLeadOfferNotificationCategory } from "../notifications/leadOfferCategories";
+import {
+  LEAD_OFFER_ACTION_ACCEPT,
+  LEAD_OFFER_ACTION_DECLINE,
+  LEAD_OFFER_ACTION_DISMISS,
+  LEAD_OFFER_ACTION_VIEW,
+} from "../notifications/leadOfferNotification";
 
-/** Bundled via expo-notifications plugin `sounds` in app.json. */
-export const LEAD_OFFER_SOUND = LEAD_OFFER_SOUND_FILENAME;
+export {
+  LEAD_OFFER_ACTION_ACCEPT,
+  LEAD_OFFER_ACTION_DECLINE,
+  LEAD_OFFER_ACTION_DISMISS,
+  LEAD_OFFER_ACTION_VIEW,
+};
+
+/** Bundled via expo-notifications plugin `sounds` in app.json — push/background only. */
+export const PUSH_LEAD_OFFER_SOUND = PUSH_LEAD_OFFER_SOUND_FILENAME;
 
 /** True when running inside Expo Go (push token fetch often hangs or is unsupported). */
 export function isExpoGo(): boolean {
@@ -38,8 +63,11 @@ export type NotificationPermissionState = "granted" | "denied" | "undetermined";
 /** General alerts: payments, registrations, account updates. */
 export const ANDROID_NOTIFICATION_CHANNEL_ID = "wam_alerts";
 
-/** Urgent lead offers — custom sound, max importance. */
-export const ANDROID_LEAD_OFFER_CHANNEL_ID = "wam_lead_offers";
+/** @deprecated import ANDROID_LEAD_OFFER_CHANNEL_ID from leadAlertConfig */
+export { ANDROID_LEAD_OFFER_CHANNEL_ID } from "../config/leadAlertConfig";
+export { ensureAndroidLeadOfferChannel } from "../notifications/leadOfferChannel";
+
+/** Urgent lead offers — MAX importance channel with custom alert sound. */
 
 const presentedNotificationIds = new Set<string>();
 const PRESENTED_NOTIFICATION_TTL_MS = 120_000;
@@ -59,13 +87,21 @@ Notifications.setNotificationHandler({
       | Record<string, unknown>
       | undefined;
     const isLeadOffer = isLeadOfferNotificationData(data);
+    const appActive = AppState.currentState === "active";
+
+    // App open → full-screen modal + in-app alert loop (not the notification shade).
+    if (isLeadOffer && appActive) {
+      promptLeadOfferModal(extractOfferIdFromPushData(data));
+    } else if (isLeadOffer && data) {
+      requestRichLeadOfferUpgrade(data);
+    }
 
     return {
-      shouldShowAlert: !isLeadOffer,
+      shouldShowAlert: !isLeadOffer || !appActive,
       shouldPlaySound: true,
       shouldSetBadge: true,
-      shouldShowBanner: !isLeadOffer,
-      shouldShowList: !isLeadOffer,
+      shouldShowBanner: !isLeadOffer || !appActive,
+      shouldShowList: !isLeadOffer || !appActive,
     };
   },
 });
@@ -86,26 +122,20 @@ export async function ensureAndroidNotificationChannel(): Promise<void> {
   });
 }
 
-export async function ensureAndroidLeadOfferChannel(): Promise<void> {
-  if (Platform.OS !== "android") return;
-
-  await Notifications.setNotificationChannelAsync(ANDROID_LEAD_OFFER_CHANNEL_ID, {
-    name: "Lead offers",
-    description: "Urgent new customer lead alerts",
-    importance: Notifications.AndroidImportance.MAX,
-    vibrationPattern: [0, 400, 200, 400, 200, 600],
-    lightColor: "#E53935",
-    sound: LEAD_OFFER_SOUND,
-    enableVibrate: true,
-    showBadge: true,
-    lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
-    bypassDnd: true,
-  });
-}
-
 export async function ensureAllNotificationChannels(): Promise<void> {
   await ensureAndroidNotificationChannel();
   await ensureAndroidLeadOfferChannel();
+  await ensureLeadOfferNotificationCategory();
+  await registerLeadOfferBackgroundNotificationTask();
+}
+
+if (Platform.OS === "android") {
+  void ensureLeadOfferNotificationCategory();
+  AppState.addEventListener("change", (state) => {
+    if (state === "active") {
+      void ensureAndroidLeadOfferChannel();
+    }
+  });
 }
 
 export async function getNotificationPermissionState(): Promise<NotificationPermissionState> {
@@ -281,6 +311,13 @@ export async function registerDeviceToken(
       }
     }
 
+    // One active device per agent — stale tokens never receive lead offers.
+    await supabase
+      .from("device_tokens")
+      .update({ is_active: false })
+      .eq("agent_id", agentId)
+      .neq("token", token);
+
     return { success: true };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -377,7 +414,7 @@ export async function presentLeadOfferNotification(
     },
     {
       channelId: ANDROID_LEAD_OFFER_CHANNEL_ID,
-      sound: LEAD_OFFER_SOUND,
+      sound: PUSH_LEAD_OFFER_SOUND,
     },
   );
 }
@@ -390,15 +427,19 @@ export async function presentLeadOfferReminder(offerId: string): Promise<void> {
   await ensureAllNotificationChannels();
 
   await Notifications.scheduleNotificationAsync({
+    identifier: leadOfferNotificationTag(offerId),
     content: {
       title: "Lead offer waiting",
+      subtitle: "Respond soon",
       body: "Still waiting for your response — accept or decline before it expires.",
-      sound: LEAD_OFFER_SOUND,
+      sound: PUSH_LEAD_OFFER_SOUND,
+      categoryIdentifier: "LEAD_OFFER",
       data: {
         type: "LEAD_OFFER",
         metadata: { offerId },
       },
       priority: Notifications.AndroidNotificationPriority.MAX,
+      color: "#E53935",
       ...(Platform.OS === "android"
         ? { channelId: ANDROID_LEAD_OFFER_CHANNEL_ID }
         : {}),
@@ -442,18 +483,24 @@ export function subscribeToNotificationAlerts(agentId: string): void {
         if (!record?.id) return;
 
         if (isLeadOfferRecord(record)) {
-          const offerId =
-            record.metadata && typeof record.metadata === "object"
-              ? String((record.metadata as { offerId?: string }).offerId ?? "")
-              : "";
-
-          promptLeadOfferModal(offerId || null);
+          const meta = (record.metadata ?? {}) as Record<string, unknown>;
+          const offerId = String(meta.offerId ?? "");
+          const preview = meta.preview as Record<string, unknown> | undefined;
 
           if (AppState.currentState === "active") {
-            return;
+            promptLeadOfferModal(offerId || null);
+          } else if (Platform.OS === "android") {
+            requestRichLeadOfferUpgrade({
+              type: "LEAD_OFFER",
+              offerId,
+              notificationId: record.id,
+              relatedId: record.related_id,
+              title: record.title,
+              message: record.message,
+              product: preview?.product,
+              metadata: meta,
+            });
           }
-
-          void presentLeadOfferNotification(record);
           return;
         }
 
@@ -496,7 +543,11 @@ export function ensureNotificationListeners(
         | undefined;
 
       if (isLeadOfferNotificationData(data)) {
-        promptLeadOfferModal(extractOfferIdFromPushData(data));
+        if (AppState.currentState === "active") {
+          promptLeadOfferModal(extractOfferIdFromPushData(data));
+        } else {
+          requestRichLeadOfferUpgrade(data);
+        }
       }
 
       const notificationId = data?.notificationId;

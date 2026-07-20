@@ -1,218 +1,226 @@
 // Supabase Edge Function: Send Push Notification
-// This function is called when a notification is created in the database
-// It fetches the device token and sends a push notification via Expo Push API
+// Called when a notification is created — delivers MD3 lead-offer alerts via Expo Push API.
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import type { LeadOfferPreview } from "../_shared/dispatch/lead-offer-notification-copy.ts";
+import {
+  buildLeadOfferExpoPushPayload,
+  buildLeadOfferPushCopy,
+} from "../_shared/dispatch/lead-offer-push-payload.ts";
 
 const EXPO_PUSH_API_URL = "https://exp.host/--/api/v2/push/send";
+const LEAD_OFFER_CHANNEL_ID = "wam_lead_offers_v9";
 
-interface NotificationData {
-  id: string;
-  agent_id: string;
-  type: string;
-  title: string;
-  message: string;
-  related_id?: string;
-  metadata?: any;
+type ExpoTicket = {
+  status?: string;
+  message?: string;
+  details?: { error?: string };
+};
+
+function expoTicketsFailed(result: unknown): string | null {
+  const tickets: ExpoTicket[] = Array.isArray((result as { data?: unknown })?.data)
+    ? ((result as { data: ExpoTicket[] }).data ?? [])
+    : [(result as { data?: ExpoTicket })?.data ?? (result as ExpoTicket)];
+
+  for (const ticket of tickets) {
+    if (ticket?.status === "error") {
+      return ticket.message ?? ticket.details?.error ?? "Expo push ticket error";
+    }
+  }
+  return null;
 }
 
 serve(async (req) => {
-  // Handle CORS
   if (req.method === "OPTIONS") {
     return new Response(null, {
       status: 204,
       headers: {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+        "Access-Control-Allow-Headers":
+          "authorization, x-client-info, apikey, content-type",
       },
     });
   }
 
   try {
-    // Log request details for debugging
-    console.log("📥 Edge Function called");
-    console.log("Method:", req.method);
-    console.log("URL:", req.url);
-    const authHeader = req.headers.get("authorization");
-    console.log("Has Authorization header:", !!authHeader);
-
-    // Get Supabase client with service role
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    
-    if (!supabaseServiceKey) {
-      console.error("❌ SUPABASE_SERVICE_ROLE_KEY not set in Edge Function secrets");
-    }
-    
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Parse request body
     const rawBody = await req.text();
-    console.log("📦 Raw request body:", rawBody.substring(0, 500)); // Log first 500 chars
-    
-    let webhookData: any;
+    let webhookData: Record<string, unknown>;
     try {
       webhookData = JSON.parse(rawBody);
-    } catch (e) {
-      console.error("❌ Failed to parse request body as JSON:", e);
+    } catch {
+      return new Response(JSON.stringify({ error: "Invalid JSON in request body" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    const notification = (webhookData.record ?? webhookData.notification) as
+      | Record<string, unknown>
+      | undefined;
+
+    if (!notification?.agent_id) {
       return new Response(
-        JSON.stringify({ error: "Invalid JSON in request body" }),
-        {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        }
+        JSON.stringify({ error: "Missing notification or agent_id" }),
+        { status: 400, headers: { "Content-Type": "application/json" } },
       );
     }
 
-    console.log("📋 Parsed webhook data:", JSON.stringify(webhookData, null, 2));
+    const notificationId = String(notification.id ?? "");
+    const agentId = String(notification.agent_id);
 
-    // Supabase webhooks send data in format: { type, table, schema, record, old_record }
-    // Database triggers might send: { notification: {...} }
-    const notification = webhookData.record || webhookData.notification;
+    if (notificationId) {
+      const { data: existingReceipt } = await supabase
+        .from("notification_push_receipts")
+        .select("notification_id")
+        .eq("notification_id", notificationId)
+        .maybeSingle();
 
-    if (!notification || !notification.agent_id) {
-      console.error("❌ Invalid webhook payload - missing notification or agent_id");
-      console.error("Full payload:", JSON.stringify(webhookData, null, 2));
-      return new Response(
-        JSON.stringify({ error: "Missing notification or agent_id", received: webhookData }),
-        {
-          status: 400,
+      if (existingReceipt) {
+        return new Response(JSON.stringify({ success: true, deduped: true }), {
+          status: 200,
           headers: { "Content-Type": "application/json" },
-        }
-      );
+        });
+      }
     }
 
-    console.log("📤 Sending push notification for:", notification.id);
-
-    // Fetch active device tokens for this agent
     const { data: deviceTokens, error: tokensError } = await supabase
       .from("device_tokens")
       .select("token, device_type")
-      .eq("agent_id", notification.agent_id)
-      .eq("is_active", true);
+      .eq("agent_id", agentId)
+      .eq("is_active", true)
+      .order("last_used_at", { ascending: false })
+      .limit(1);
 
     if (tokensError) {
-      console.error("Error fetching device tokens:", tokensError);
       return new Response(
         JSON.stringify({ error: "Failed to fetch device tokens" }),
-        {
-          status: 500,
-          headers: { "Content-Type": "application/json" },
-        }
+        { status: 500, headers: { "Content-Type": "application/json" } },
       );
     }
 
-    if (!deviceTokens || deviceTokens.length === 0) {
-      console.log("⚠️ No device tokens found for agent:", notification.agent_id);
+    if (!deviceTokens?.length) {
       return new Response(
         JSON.stringify({ success: true, message: "No device tokens found" }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }
+        { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }
 
-    // Prepare push notification payload.
-    // Foreground banners use setNotificationHandler; background/killed needs OS-level display
-    // (Android channel + priority, iOS alert via title/body).
     const isLeadOffer = notification.type === "LEAD_OFFER";
-    const leadOfferChannelId = "wam_lead_offers";
-    const leadOfferSound = "lead_offer.wav";
 
-    const pushNotifications = deviceTokens.map((dt) => {
-      const payload: Record<string, unknown> = {
-        to: dt.token,
-        sound: isLeadOffer ? leadOfferSound : "default",
-        title: notification.title,
-        body: notification.message,
-        data: {
-          type: notification.type,
-          notificationId: notification.id,
-          relatedId: notification.related_id,
-          metadata: notification.metadata || {},
-        },
-        badge: 1,
-        priority: isLeadOffer ? "max" : "high",
-      };
+    const pushNotifications = await Promise.all(
+      deviceTokens.map(async (dt) => {
+        const leadSound =
+          dt.device_type === "ios" ? "lead_push_alert.wav" : "lead_push_alert";
 
-      if (dt.device_type !== "ios") {
-        payload.channelId = isLeadOffer ? leadOfferChannelId : "wam_alerts";
-        payload.priority = "max";
-      }
+        if (!isLeadOffer) {
+          return {
+            to: dt.token,
+            sound: "default",
+            title: notification.title,
+            body: notification.message,
+            data: {
+              type: notification.type,
+              notificationId,
+              relatedId: notification.related_id,
+              metadata: notification.metadata || {},
+            },
+            badge: 1,
+            priority: "high",
+            ...(dt.device_type !== "ios" ? { channelId: "wam_alerts" } : {}),
+          };
+        }
 
-      return payload;
-    });
+        const metadata = (notification.metadata ?? {}) as Record<string, unknown>;
+        const preview = (metadata.preview ?? {}) as LeadOfferPreview;
+        const offerId = metadata.offerId ? String(metadata.offerId) : undefined;
 
-    console.log(`📱 Sending ${pushNotifications.length} push notification(s)`);
-    console.log("📤 Push notification payload:", JSON.stringify(pushNotifications, null, 2));
+        const cutoff = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+        const { data: pendingRows } = await supabase
+          .from("notifications")
+          .select("id, metadata, created_at")
+          .eq("agent_id", agentId)
+          .eq("type", "LEAD_OFFER")
+          .eq("is_read", false)
+          .gte("created_at", cutoff)
+          .order("created_at", { ascending: false })
+          .limit(5);
 
-    // Send push notifications via Expo Push API
-    console.log("🌐 Calling Expo Push API...");
+        const copy = buildLeadOfferPushCopy(
+          pendingRows ?? [],
+          preview,
+          pendingRows?.length ?? 1,
+        );
+
+        return buildLeadOfferExpoPushPayload({
+          token: dt.token,
+          deviceType: dt.device_type,
+          notificationId,
+          relatedId: notification.related_id
+            ? String(notification.related_id)
+            : undefined,
+          offerId,
+          preview,
+          copy,
+          leadOfferChannelId: LEAD_OFFER_CHANNEL_ID,
+          leadSound,
+        });
+      }),
+    );
+
     const response = await fetch(EXPO_PUSH_API_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Accept": "application/json",
+        Accept: "application/json",
         "Accept-Encoding": "gzip, deflate",
       },
       body: JSON.stringify(pushNotifications),
     });
 
-    console.log("📡 Expo Push API response status:", response.status, response.statusText);
-    
     const result = await response.json();
-    console.log("📥 Expo Push API response:", JSON.stringify(result, null, 2));
 
     if (!response.ok) {
-      console.error("❌ Expo Push API error:", result);
       return new Response(
         JSON.stringify({ error: "Failed to send push notification", details: result }),
-        {
-          status: 500,
-          headers: { "Content-Type": "application/json" },
-        }
+        { status: 500, headers: { "Content-Type": "application/json" } },
       );
     }
 
-    // Check if Expo returned any errors in the response
-    if (result.data && Array.isArray(result.data)) {
-      result.data.forEach((receipt: any, index: number) => {
-        if (receipt.status === "error") {
-          console.error(`❌ Push notification ${index + 1} failed:`, receipt.message, receipt.details);
-        } else {
-          console.log(`✅ Push notification ${index + 1} sent successfully:`, receipt.id);
-        }
+    const ticketError = expoTicketsFailed(result);
+    if (ticketError) {
+      return new Response(
+        JSON.stringify({ error: "Expo push rejected", details: result, message: ticketError }),
+        { status: 502, headers: { "Content-Type": "application/json" } },
+      );
+    }
+
+    if (notificationId) {
+      await supabase.from("notification_push_receipts").insert({
+        notification_id: notificationId,
       });
     }
 
-    console.log("✅ Push notifications sent successfully:", result);
-
     return new Response(
-      JSON.stringify({
-        success: true,
-        sent: pushNotifications.length,
-        result,
-      }),
+      JSON.stringify({ success: true, sent: pushNotifications.length, result }),
       {
         status: 200,
         headers: {
           "Content-Type": "application/json",
           "Access-Control-Allow-Origin": "*",
         },
-      }
+      },
     );
   } catch (error) {
-    console.error("❌ Error in send-push-notification:", error);
-    return new Response(
-      JSON.stringify({ error: error.message || "Unknown error" }),
-      {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      }
-    );
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return new Response(JSON.stringify({ error: message }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 });
-

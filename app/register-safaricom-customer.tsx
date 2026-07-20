@@ -45,6 +45,7 @@ import SafaricomFiberLocationStep from "../components/safaricom-register/Safaric
 import SafaricomPackageLocationStep from "../components/safaricom-register/SafaricomPackageLocationStep";
 import SafaricomPortableDedicatedInstallStep from "../components/safaricom-register/SafaricomPortableDedicatedInstallStep";
 import { insertSafaricomRegistration } from "../lib/services/safaricomRegistrationService";
+import { CustomerDataConsent } from "../components/CustomerDataConsent";
 import { isOnline } from "../lib/services/syncService";
 import { initOfflineStorage } from "../lib/services/offlineStorage";
 
@@ -56,6 +57,7 @@ export default function RegisterSafaricomCustomerScreen() {
   const [currentStep, setCurrentStep] = useState(1);
   const [agentData, setAgentData] = useState<any>(null);
   const [showApprovalModal, setShowApprovalModal] = useState(false);
+  const [customerConsent, setCustomerConsent] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [fontsLoaded] = useFonts({
@@ -113,6 +115,9 @@ export default function RegisterSafaricomCustomerScreen() {
     step1Package === "safaricom_portable_5g" ||
     step1Package === "safaricom_dedicated_wifi";
   const hasInstallStep = isFiberPackage || isPortableOrDedicated;
+  const isSubmitStep =
+    (currentStep === 2 && !hasInstallStep) ||
+    (currentStep === 3 && hasInstallStep);
 
   const wizardSteps = useMemo(() => {
     if (isFiberPackage) {
@@ -464,10 +469,24 @@ export default function RegisterSafaricomCustomerScreen() {
       return;
     }
     if (currentStep === 2 && !hasInstallStep) {
+      if (!customerConsent) {
+        Alert.alert(
+          "Consent required",
+          "Please confirm the customer understands how their data will be used before submitting."
+        );
+        return;
+      }
       handleSubmit(onValidSubmit)();
       return;
     }
     if (currentStep === 3) {
+      if (!customerConsent) {
+        Alert.alert(
+          "Consent required",
+          "Please confirm the customer understands how their data will be used before submitting."
+        );
+        return;
+      }
       handleSubmit(onValidSubmit)();
     }
   };
@@ -648,10 +667,24 @@ export default function RegisterSafaricomCustomerScreen() {
                 />
               )}
               {currentStep === 2 && !hasInstallStep && (
-                <SafaricomCustomerInfoStep control={control} />
+                <>
+                  <SafaricomCustomerInfoStep control={control} />
+                  <CustomerDataConsent
+                    checked={customerConsent}
+                    onToggle={() => setCustomerConsent((v) => !v)}
+                    carrierLabel="Safaricom"
+                  />
+                </>
               )}
               {currentStep === 3 && (
-                <SafaricomCustomerInfoStep control={control} />
+                <>
+                  <SafaricomCustomerInfoStep control={control} />
+                  <CustomerDataConsent
+                    checked={customerConsent}
+                    onToggle={() => setCustomerConsent((v) => !v)}
+                    carrierLabel="Safaricom"
+                  />
+                </>
               )}
             </View>
           </ScrollView>
@@ -686,6 +719,7 @@ export default function RegisterSafaricomCustomerScreen() {
             onPress={handleFooterContinue}
             disabled={
               isSubmitting ||
+              (isSubmitStep && !customerConsent) ||
               (currentStep === 1 && !step1Ready) ||
               (currentStep === 2 &&
                 isFiberPackage &&

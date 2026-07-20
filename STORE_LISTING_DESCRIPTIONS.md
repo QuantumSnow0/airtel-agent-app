@@ -1,68 +1,67 @@
 # Google Play Store Listing Descriptions
 
+**Privacy policy URL (required in Play Console):**  
+`https://olaounggwgxpbenmuvnl.supabase.co/functions/v1/privacy-policy`
+
+**Affiliation note for listing / screenshots:** WAM Apps is an independent field-agent tool — not published by or affiliated with Airtel Kenya or Safaricom PLC. Do not use carrier logos in store graphics.
+
+---
+
 ## Short Description (80 characters max)
 ```
-Register customers for 5G SmartConnect services. Offline mode & real-time updates included.
+Register home internet customers. Offline mode, lead alerts & commissions.
 ```
 
-**Character count: 80/80** ✅
+**Character count: 72/80**
 
 ---
 
 ## Full Description (4000 characters max)
 
 ```
-WAM Apps empowers field agents to register customers for 5G SmartConnect services efficiently and seamlessly. Built specifically for agents working in the field, this mobile application streamlines customer registration processes while ensuring you can work anytime, anywhere.
+WAM Apps empowers approved field agents to register customers for home internet installation services. Built for agents working in the field, this app streamlines customer registration while supporting offline work and real-time lead dispatch.
+
+WAM Apps is an independent operations platform. It is not published by, sponsored by, or affiliated with Airtel Kenya or Safaricom PLC. Carrier names in the app identify which service you are registering.
 
 🌟 KEY FEATURES:
 
 📋 Customer Registration Made Easy
-Register customers for 5G SmartConnect services directly from your mobile device. The intuitive multi-step form guides you through collecting all necessary customer information, including contact details, service preferences, and visit scheduling.
+Register customers for supported network services directly from your mobile device. The intuitive multi-step form guides you through collecting customer information, service preferences, and visit scheduling.
 
 📊 Agent Dashboard
-Get instant insights into your registration activity with a comprehensive dashboard. View your recent registrations, track registration statuses, and monitor your performance metrics all in one place.
+View recent registrations, track statuses, and monitor your performance metrics in one place.
 
 🔄 Offline Mode with Automatic Sync
-Never lose a registration, even when you're working in areas with poor connectivity. Register customers offline, and the app automatically syncs all data when you're back online. Your work continues uninterrupted, regardless of network conditions.
+Register customers offline. The app syncs when you are back online so work continues in low-connectivity areas.
 
-📱 Real-Time Updates
-Stay informed with real-time status updates on your registrations. Receive instant notifications when registration statuses change, ensuring you're always up to date with customer service progress.
+📱 Real-Time Lead Offers
+Receive installation lead offers with Accept and Decline actions when you are available for dispatch.
 
 🔔 Push Notifications
-Get notified about important events, status changes, and system updates through push notifications. Never miss critical information that affects your work.
+Stay informed about lead offers, registration updates, and account notifications.
 
-💼 Track Your Performance
-Monitor your registration activity and track your progress. The dashboard provides clear visibility into your registrations, helping you stay organized and focused on your goals.
+💼 Commissions & Earnings
+Track commissions and view payment history for completed work.
 
-🔒 Secure & Reliable
-Your data is securely stored and synchronized with enterprise-grade security measures. All customer information is handled with the utmost care and privacy protection.
-
-🚀 Simple & Fast
-The app is designed for speed and ease of use. Quickly register customers with minimal taps, and access all your information with a clean, user-friendly interface optimized for mobile field work.
+🔒 Secure & Account Controls
+Data is transmitted over encrypted connections. Agents can delete their account from Profile.
 
 ---
 
-Whether you're registering customers at their doorstep, in the field, or anywhere in between, WAM Apps ensures you have everything you need to succeed as a SmartConnect field agent. Download now and start registering customers with confidence.
+Download WAM Apps to register customers and respond to installation leads with a reliable mobile tool built for field work.
 ```
 
-**Character count: ~1,800/4000** ✅
+**Character count: ~1,450/4000**
 
 ---
 
-## Alternative Shorter Full Description (if you want something more concise)
+## Data safety (Play Console checklist)
 
-```
-WAM Apps is the mobile companion for field agents registering customers for 5G SmartConnect services. 
+Declare collection of:
+- **Personal info:** name, email, phone number, address (text town/landmark — not GPS)
+- **App activity:** registrations, lead responses
+- **Device IDs:** push notification tokens
 
-✅ Register customers on the go with an intuitive multi-step form
-✅ Work offline - all data syncs automatically when you're back online  
-✅ Track registrations and status updates in real-time
-✅ View your dashboard with recent registrations and performance metrics
-✅ Receive push notifications for important updates
-
-Built for field work with offline-first architecture, WAM Apps ensures you never lose a registration, even in areas with poor connectivity. The app automatically syncs your work when connection is restored.
-
-Perfect for agents who need a reliable, fast, and easy-to-use tool for customer registration. Download now and streamline your SmartConnect registration workflow.
-```
-
-**Character count: ~750/4000** ✅
+Purposes: app functionality, account management, fraud prevention.  
+Data is shared with telecom partners only to process customer orders.  
+Users can request account deletion in-app (Profile → Delete Account).

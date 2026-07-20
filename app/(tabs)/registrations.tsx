@@ -305,6 +305,7 @@ export default function RegistrationsScreen() {
           "id, customer_name, preferred_package, installation_town, status, created_at, ms_forms_response_id, ms_forms_submitted_at"
         )
         .eq("agent_id", user.id)
+        .eq("commission_exempt", false)
         .order("created_at", { ascending: false });
 
       if (filter !== "all") {
@@ -386,6 +387,7 @@ export default function RegistrationsScreen() {
             "id, customer_name, preferred_package, installation_town, status, created_at, ms_forms_response_id, ms_forms_submitted_at"
           )
           .eq("agent_id", user.id)
+          .eq("commission_exempt", false)
           .order("created_at", { ascending: false }),
         supabase
           .from("safaricom_registrations")
@@ -501,6 +503,7 @@ export default function RegistrationsScreen() {
         .from("customer_registrations")
         .select("*", { count: "exact", head: true })
         .eq("agent_id", user.id)
+        .eq("commission_exempt", false)
         .is("ms_forms_response_id", null);
       supabaseTotal = count || 0;
 

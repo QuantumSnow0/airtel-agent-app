@@ -2,7 +2,7 @@
   "expo": {
     "name": "WAM Apps",
     "slug": "wam-apps",
-    "version": "1.0.8",
+    "version": "1.0.30",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "wamapps",
@@ -19,7 +19,7 @@
     "android": {
       "package": "com.wam.apps",
       "googleServicesFile": "./google-services.json",
-      "versionCode": 14,
+      "versionCode": 36,
       "statusBar": {
         "barStyle": "dark-content",
         "backgroundColor": "#FFFFFF"
@@ -35,9 +35,29 @@
         "INTERNET",
         "ACCESS_NETWORK_STATE",
         "POST_NOTIFICATIONS",
-        "RECEIVE_BOOT_COMPLETED",
         "VIBRATE"
       ],
+      "manifestQueries": {
+        "package": [
+          "com.airtel.airtelwork.africa"
+        ],
+        "intent": [
+          {
+            "action": "android.intent.action.MAIN",
+            "category": [
+              "android.intent.category.LAUNCHER"
+            ]
+          },
+          {
+            "action": "android.intent.action.DIAL",
+            "data": [
+              {
+                "scheme": "tel"
+              }
+            ]
+          }
+        ]
+      },
       "intentFilters": [
         {
           "action": "VIEW",
@@ -76,11 +96,16 @@
         "expo-notifications",
         {
           "icon": "./assets/images/android-icon-monochrome.png",
-          "color": "#0066CC",
+          "color": "#E53935",
           "defaultChannel": "wam_alerts",
-          "sounds": ["./assets/sounds/lead_offer.wav"]
+          "sounds": [
+            "./assets/sounds/lead_push_alert.wav",
+            "./assets/sounds/lead_offer.wav"
+          ]
         }
-      ]
+      ],
+      "./plugins/withLeadOfferNotificationIcons.js",
+      "./plugins/withPlayStoreCompliance.js"
     ],
     "experiments": {
       "typedRoutes": true,

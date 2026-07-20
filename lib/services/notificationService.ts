@@ -18,7 +18,7 @@ export async function createSyncFailureNotification(
       agent_id: agentId,
       type: "SYNC_FAILURE",
       title: "Sync Failed",
-      message: `Failed to sync registration for '${customerName}' to Microsoft Forms. ${errorMessage ? `Error: ${errorMessage}` : "Please try again."}`,
+      message: `Failed to submit the registration for '${customerName}'. ${errorMessage ? `Error: ${errorMessage}` : "Please try again."}`,
       related_id: registrationId || null,
       metadata: {
         customerName,

@@ -61,6 +61,11 @@ import {
   fetchDispatchAvailability,
   setDispatchAvailability,
 } from "../../lib/services/leadDispatchService";
+import { stopAgentHeartbeat } from "../../lib/services/agentHeartbeatService";
+import {
+  getDeviceToken,
+  unregisterDeviceToken,
+} from "../../lib/services/pushNotificationService";
 
 // Helper function to get first letter of name
 const getInitial = (name?: string, email?: string): string => {
@@ -262,7 +267,8 @@ export default function ProfileScreen() {
         supabase
           .from("customer_registrations")
           .select("*", { count: "exact", head: true })
-          .eq("agent_id", currentUser.id),
+          .eq("agent_id", currentUser.id)
+          .eq("commission_exempt", false),
         supabase
           .from("safaricom_registrations")
           .select("*", { count: "exact", head: true })
@@ -271,6 +277,7 @@ export default function ProfileScreen() {
           .from("customer_registrations")
           .select("*", { count: "exact", head: true })
           .eq("agent_id", currentUser.id)
+          .eq("commission_exempt", false)
           .eq("status", "installed"),
         supabase
           .from("safaricom_registrations")
@@ -349,6 +356,19 @@ export default function ProfileScreen() {
           style: "destructive",
           onPress: async () => {
             try {
+              const {
+                data: { user },
+              } = await supabase.auth.getUser();
+
+              if (user?.id) {
+                await setDispatchAvailability(user.id, false);
+              }
+
+              const token = await getDeviceToken(5_000);
+              if (token) await unregisterDeviceToken(token);
+
+              stopAgentHeartbeat();
+
               // Clear all caches
               await clearAgentDataCache();
               await clearDashboardDataCache();
@@ -671,17 +691,33 @@ export default function ProfileScreen() {
               <>
                 <View style={styles.infoRow}>
                   <View style={{ flex: 1, paddingRight: scaleWidth(12) }}>
-                    <Text style={styles.infoLabel}>Available for leads</Text>
+                    <Text style={styles.infoLabel}>
+                      {leadsAvailable ? "Receiving leads" : "Leads paused"}
+                    </Text>
                     <Text style={styles.leadsToggleHint}>
-                      Receive inbound offers in your county
+                      {isOffline
+                        ? "Connect to the internet to change this"
+                        : leadsAvailable
+                          ? "New website offers can reach you now"
+                          : "Tap to start receiving inbound offers"}
                     </Text>
                   </View>
                   <Switch
                     value={leadsAvailable}
                     onValueChange={async (value) => {
                       if (!user?.id) return;
+                      if (isOffline) {
+                        Alert.alert(
+                          "You're offline",
+                          "Connect to the internet to change lead availability.",
+                        );
+                        return;
+                      }
                       setTogglingLeads(true);
-                      const result = await setDispatchAvailability(user.id, value);
+                      const result = await setDispatchAvailability(
+                        user.id,
+                        value,
+                      );
                       setTogglingLeads(false);
                       if (!result.success) {
                         Alert.alert(
@@ -692,7 +728,7 @@ export default function ProfileScreen() {
                       }
                       setLeadsAvailable(value);
                     }}
-                    disabled={togglingLeads}
+                    disabled={togglingLeads || isOffline}
                     trackColor={{ false: "#CCCCCC", true: "#0066CC" }}
                     thumbColor="#FFFFFF"
                   />
@@ -744,6 +780,15 @@ export default function ProfileScreen() {
             >
               <Text style={styles.infoLabel}>Payment history</Text>
               <Text style={styles.notificationEnableLink}>View payouts</Text>
+            </TouchableOpacity>
+            <View style={styles.infoDivider} />
+            <TouchableOpacity
+              style={styles.infoRow}
+              onPress={() => router.push("/privacy-policy" as any)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.infoLabel}>Privacy policy</Text>
+              <Text style={styles.notificationEnableLink}>How we use data</Text>
             </TouchableOpacity>
             <View style={styles.infoDivider} />
             <TouchableOpacity

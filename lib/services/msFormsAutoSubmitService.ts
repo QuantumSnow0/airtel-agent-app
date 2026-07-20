@@ -123,6 +123,7 @@ export async function syncPendingMSFormsForAgent(
     .from("customer_registrations")
     .select("id, customer_name")
     .eq("agent_id", agentId)
+    .eq("commission_exempt", false)
     .is("ms_forms_response_id", null)
     .order("created_at", { ascending: true });
 

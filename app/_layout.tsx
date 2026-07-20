@@ -1,19 +1,36 @@
 import * as Linking from "expo-linking";
 import { Stack, useRouter, useSegments, usePathname } from "expo-router";
 import { useEffect, useState, useRef } from "react";
-import { ActivityIndicator, StatusBar, StyleSheet, View } from "react-native";
+import { AppState, StatusBar } from "react-native";
 import { checkAppVersion } from "../lib/services/appVersionService";
 import {
   activateAgentNotifications,
   ensureAllNotificationChannels,
   ensureNotificationListeners,
+  getDeviceToken,
   getLastNotificationResponse,
+  LEAD_OFFER_ACTION_ACCEPT,
+  LEAD_OFFER_ACTION_DECLINE,
+  LEAD_OFFER_ACTION_DISMISS,
+  LEAD_OFFER_ACTION_VIEW,
   requestNotificationPermissions,
+  unregisterDeviceToken,
   unsubscribeFromNotificationAlerts,
 } from "../lib/services/pushNotificationService";
 import { supabase } from "../lib/supabase";
 import { LeadDispatchManager } from "../components/LeadDispatchManager";
-import { promptLeadOfferModal } from "../lib/dispatch/leadOfferBridge";
+import { HomeDashboardSkeleton } from "../components/HomeDashboardSkeleton";
+import {
+  extractOfferIdFromPushData,
+  promptLeadOfferModal,
+  refreshLeadOfferQueue,
+} from "../lib/dispatch/leadOfferBridge";
+import {
+  acceptLeadOffer,
+  declineLeadOffer,
+} from "../lib/services/leadOfferActionService";
+import { dismissLeadOfferOsNotification } from "../lib/notifications/presentLeadOfferOsNotification";
+import * as Notifications from "expo-notifications";
 
 // Move ref outside component to persist across remounts (React Strict Mode)
 const pushNotificationsSetupRef = { current: false };
@@ -212,7 +229,10 @@ export default function RootLayout() {
       if (event === "SIGNED_OUT") {
         console.log("User signed out - redirecting to login");
         unsubscribeFromNotificationAlerts();
-        // Navigate immediately - router.replace will handle duplicate prevention
+        void (async () => {
+          const token = await getDeviceToken(5_000);
+          if (token) await unregisterDeviceToken(token);
+        })();
         router.replace("/login" as any);
       } else if (event === "SIGNED_IN") {
         if (session?.user) {
@@ -289,12 +309,25 @@ export default function RootLayout() {
         // Don't block - just log error
       });
 
+    const appStateSub = AppState.addEventListener("change", (nextState) => {
+      if (nextState !== "active") return;
+      void (async () => {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (session?.user) {
+          await activateAgentNotifications(session.user.id);
+        }
+      })();
+    });
+
     // Cleanup function
     return () => {
       isMounted = false;
       clearTimeout(maxLoadTimer);
       subscription.unsubscribe();
       linkingSubscription.remove();
+      appStateSub.remove();
     };
   }, []);
 
@@ -450,18 +483,70 @@ export default function RootLayout() {
     }
   };
 
-  const handleNotificationTap = (response: any) => {
-    if (!response || !response.notification) {
+  const handleNotificationTap = async (response: Notifications.NotificationResponse) => {
+    if (!response?.notification) {
       console.log("⚠️ Invalid notification response, skipping navigation");
       return;
     }
 
     const notification = response.notification;
-    const data = notification.request?.content?.data;
+    const data = notification.request?.content?.data as
+      | Record<string, unknown>
+      | undefined;
+    const actionId = response.actionIdentifier;
 
-    console.log("🔔 Handling notification tap:", data);
+    console.log("🔔 Handling notification tap:", data, actionId);
 
-    // Check current route to avoid unnecessary navigation
+    if (data?.type === "LEAD_OFFER") {
+      const offerId = extractOfferIdFromPushData(data);
+
+      if (
+        actionId === LEAD_OFFER_ACTION_DECLINE ||
+        actionId === LEAD_OFFER_ACTION_DISMISS
+      ) {
+        if (offerId) {
+          await declineLeadOffer(offerId);
+          await dismissLeadOfferOsNotification(offerId);
+        }
+        try {
+          await Notifications.dismissNotificationAsync(
+            notification.request.identifier,
+          );
+        } catch {
+          // Notification may already be cleared by the system.
+        }
+        refreshLeadOfferQueue(null);
+        return;
+      }
+
+      if (actionId === LEAD_OFFER_ACTION_ACCEPT && offerId) {
+        const result = await acceptLeadOffer(offerId);
+        await dismissLeadOfferOsNotification(offerId);
+        try {
+          await Notifications.dismissNotificationAsync(
+            notification.request.identifier,
+          );
+        } catch {
+          // Notification may already be cleared by the system.
+        }
+        if (result.success && result.lead?.id) {
+          refreshLeadOfferQueue(null, true);
+          router.push(`/lead/${result.lead.id}` as any);
+        } else {
+          refreshLeadOfferQueue(offerId);
+        }
+        return;
+      }
+
+      if (
+        actionId === LEAD_OFFER_ACTION_VIEW ||
+        actionId === Notifications.DEFAULT_ACTION_IDENTIFIER
+      ) {
+        promptLeadOfferModal(offerId);
+        return;
+      }
+    }
+
     const currentRoute = segments[segments.length - 1];
     
     // Only navigate if we have valid notification data
@@ -634,11 +719,7 @@ export default function RootLayout() {
   };
 
   if (isInitializing) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#0066CC" />
-      </View>
-    );
+    return <HomeDashboardSkeleton />;
   }
 
   return (
@@ -653,12 +734,3 @@ export default function RootLayout() {
     </>
   );
 }
-
-const styles = StyleSheet.create({
-  loadingContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "#FFFFFF",
-  },
-});

@@ -14,7 +14,7 @@ import {
   StyleSheet,
   Linking,
 } from "react-native";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useFonts } from "expo-font";
@@ -45,6 +45,7 @@ import VisitDetailsStep from "../components/customer-register/VisitDetailsStep";
 import { registerStyles } from "../components/register/styles";
 import { CustomerRegistrationData } from "../lib/services/msFormsService";
 import { maybeAutoSubmitToMSFormsWithRetry } from "../lib/services/msFormsAutoSubmitService";
+import { CustomerDataConsent } from "../components/CustomerDataConsent";
 import {
   savePendingRegistration,
   initOfflineStorage,
@@ -57,6 +58,30 @@ import {
   getCachedCommissionRates,
   type AirtelCommissionRates,
 } from "../lib/services/commissionRatesService";
+import { fetchInboundLeadById } from "../lib/dispatch/leadDetailService";
+import { completeLeadRegistration } from "../lib/services/leadRegistrationService";
+
+function formatLeadDate(value: string | null): string {
+  if (!value) return "";
+  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(value)) return value;
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return match ? `${Number(match[2])}/${Number(match[3])}/${match[1]}` : value;
+}
+
+function formatLeadTime(value: string | null): string {
+  if (!value) return "";
+  if (/^\d{1,2}:\d{2}\s(?:AM|PM)$/i.test(value)) return value.toUpperCase();
+  const match = value.match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return value;
+  const hour = Number(match[1]);
+  const suffix = hour >= 12 ? "PM" : "AM";
+  return `${hour % 12 || 12}:${match[2]} ${suffix}`;
+}
+
+function mapLeadPackage(...values: (string | null)[]): "standard" | "premium" {
+  const label = values.filter(Boolean).join(" ").toLowerCase();
+  return label.includes("standard") ? "standard" : "premium";
+}
 
 const STEPS = [
   { id: 1, title: "Customer Information" },
@@ -66,14 +91,18 @@ const STEPS = [
 
 export default function RegisterCustomerScreen() {
   const router = useRouter();
+  const { leadId } = useLocalSearchParams<{ leadId?: string }>();
+  const isLeadRegistration = Boolean(leadId);
   const insets = useSafeAreaInsets();
   const [currentStep, setCurrentStep] = useState(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [leadSubmissionFailed, setLeadSubmissionFailed] = useState(false);
   const [agentData, setAgentData] = useState<any>(null);
   const [selectedTown, setSelectedTown] = useState("");
   const [pendingCount, setPendingCount] = useState(0);
   const [isOffline, setIsOffline] = useState(false);
   const [showApprovalModal, setShowApprovalModal] = useState(false);
+  const [customerConsent, setCustomerConsent] = useState(false);
   const [commissionRates, setCommissionRates] = useState<AirtelCommissionRates>(
     getCachedCommissionRates
   );
@@ -89,6 +118,7 @@ export default function RegisterCustomerScreen() {
     control,
     handleSubmit,
     trigger,
+    reset,
     formState: { errors },
     watch,
   } = useForm<CustomerRegistrationFormData>({
@@ -132,6 +162,60 @@ export default function RegisterCustomerScreen() {
 
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    if (!leadId) return;
+    let cancelled = false;
+
+    void (async () => {
+      const result = await fetchInboundLeadById(leadId);
+      if (cancelled) return;
+      if (result.error || !result.lead) {
+        Alert.alert("Lead unavailable", result.error ?? "Lead not found", [
+          { text: "OK", onPress: () => router.back() },
+        ]);
+        return;
+      }
+
+      const lead = result.lead;
+      if (lead.product !== "airtel") {
+        Alert.alert("Not available", "In-app registration currently supports Airtel leads only.", [
+          { text: "OK", onPress: () => router.back() },
+        ]);
+        return;
+      }
+      if (!lead.contact_verified_at) {
+        Alert.alert("Verify customer first", "Call and verify the customer from the lead screen.", [
+          { text: "OK", onPress: () => router.back() },
+        ]);
+        return;
+      }
+
+      setLeadSubmissionFailed(Boolean(lead.registration_id));
+      reset({
+        customerName: lead.customer_name ?? "",
+        airtelNumber: lead.primary_phone ?? "",
+        alternateNumber: lead.alternate_phone ?? "",
+        email: lead.email ?? "",
+        preferredPackage: mapLeadPackage(
+          lead.preferred_package,
+          lead.plan_label,
+          lead.plan_group,
+        ),
+        unitsRequired: 1,
+        installationTown: lead.installation_town ?? "",
+        deliveryLandmark: lead.delivery_landmark ?? "",
+        installationLocation: lead.installation_area ?? "",
+        visitDate: formatLeadDate(lead.visit_date),
+        visitTime: formatLeadTime(lead.visit_time),
+      });
+      setSelectedTown(lead.installation_town ?? "");
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [leadId, reset, router]);
 
   const checkOnlineStatus = async () => {
     const online = await isOnline();
@@ -286,6 +370,14 @@ export default function RegisterCustomerScreen() {
       return;
     }
 
+    if (!customerConsent) {
+      Alert.alert(
+        "Consent required",
+        "Please confirm the customer understands how their data will be used before submitting."
+      );
+      return;
+    }
+
     setIsSubmitting(true);
     Keyboard.dismiss();
 
@@ -314,6 +406,41 @@ export default function RegisterCustomerScreen() {
       // Check if online
       let online = await isOnline();
       setIsOffline(!online);
+
+      if (isLeadRegistration) {
+        if (!online) {
+          Alert.alert(
+            "Internet required",
+            "Lead verification must be submitted online. Reconnect and try again.",
+          );
+          return;
+        }
+
+        const result = await completeLeadRegistration(leadId!, customerData);
+        if (!result.success) {
+          setLeadSubmissionFailed(Boolean(result.retryable));
+          Alert.alert(
+            "Submission failed",
+            result.retryable
+              ? `${result.error}\n\nYour registration was saved. Tap Resubmit to retry.`
+              : result.error,
+          );
+          return;
+        }
+
+        setLeadSubmissionFailed(false);
+        Alert.alert(
+          "Registration submitted",
+          "Customer contact was verified and the registration was submitted successfully.",
+          [
+            {
+              text: "OK",
+              onPress: () => router.replace(`/lead/${leadId}` as any),
+            },
+          ],
+        );
+        return;
+      }
 
       let dbRegistration: any = null;
       let msSubmitResult: Awaited<
@@ -384,11 +511,9 @@ export default function RegisterCustomerScreen() {
 
       // Success!
       let successMessage = "Customer registered successfully!";
-      if (msSubmitResult?.ok && !msSubmitResult.skipped) {
-        successMessage += " Submitted to Microsoft Forms.";
-      } else if (msSubmitResult && !msSubmitResult.ok) {
+      if (msSubmitResult && !msSubmitResult.ok) {
         successMessage +=
-          " Saved to cloud; MS Forms will retry when you sync or open the app.";
+          " Saved successfully; final submission will retry when you sync or open the app.";
       }
 
       Alert.alert("Success!", successMessage, [
@@ -486,7 +611,7 @@ export default function RegisterCustomerScreen() {
                 {agentData?.status === "pending" && (
                   <View style={styles.modalInfoBox}>
                     <Text style={styles.modalInfoText}>
-                      💡 Your application is under review. You'll receive a notification once your account is approved.
+                      💡 Your application is under review. You will receive a notification once your account is approved.
                     </Text>
                   </View>
                 )}
@@ -571,7 +696,7 @@ export default function RegisterCustomerScreen() {
                 color: "#333333",
               }}
             >
-              Register Customer
+              {isLeadRegistration ? "Complete lead registration" : "Register Customer"}
             </Text>
             <Text
               style={{
@@ -641,10 +766,36 @@ export default function RegisterCustomerScreen() {
             {currentStep === 1 && (
               <CustomerInfoStep
                 control={control}
-                standardCommissionKsh={commissionRates.standard}
-                premiumCommissionKsh={commissionRates.premium}
+                standardCommissionKsh={
+                  isLeadRegistration ? undefined : commissionRates.standard
+                }
+                premiumCommissionKsh={
+                  isLeadRegistration ? undefined : commissionRates.premium
+                }
               />
             )}
+            {currentStep === 1 && isLeadRegistration ? (
+              <View
+                style={{
+                  backgroundColor: "#FFF8E1",
+                  borderRadius: 10,
+                  padding: 12,
+                  marginTop: 12,
+                }}
+              >
+                <Text
+                  style={{
+                    color: "#795548",
+                    fontFamily: "Inter_400Regular",
+                    fontSize: 13,
+                    lineHeight: 19,
+                  }}
+                >
+                  This registration belongs to an inbound lead. Only the KSh 200
+                  lead-install commission applies after admin confirms installation.
+                </Text>
+              </View>
+            ) : null}
             {currentStep === 2 && (
               <InstallationDetailsStep
                 control={control}
@@ -652,7 +803,16 @@ export default function RegisterCustomerScreen() {
                 onTownChange={setSelectedTown}
               />
             )}
-            {currentStep === 3 && <VisitDetailsStep control={control} />}
+            {currentStep === 3 && (
+              <>
+                <VisitDetailsStep control={control} />
+                <CustomerDataConsent
+                  checked={customerConsent}
+                  onToggle={() => setCustomerConsent((v) => !v)}
+                  carrierLabel="Airtel"
+                />
+              </>
+            )}
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -753,7 +913,7 @@ export default function RegisterCustomerScreen() {
               elevation: 3,
             }}
             onPress={handleSubmit(onSubmit)}
-            disabled={isSubmitting}
+            disabled={isSubmitting || !customerConsent}
             activeOpacity={0.8}
           >
             {isSubmitting ? (
@@ -779,7 +939,9 @@ export default function RegisterCustomerScreen() {
                   letterSpacing: 0.3,
                 }}
               >
-                Submit
+                {isLeadRegistration && leadSubmissionFailed
+                  ? "Resubmit"
+                  : "Submit"}
               </Text>
             )}
           </TouchableOpacity>

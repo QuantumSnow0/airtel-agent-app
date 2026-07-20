@@ -11,7 +11,11 @@ export type LeadStatus =
   | "assigned"
   | "kyc_in_progress"
   | "kyc_completed"
+  | "pending_install"
   | "installed"
+  | "rejected"
+  | "duplicate"
+  | "cancelled"
   | "needs_reassignment"
   | "admin_queue"
   | "lost"
@@ -69,16 +73,24 @@ export type InboundLead = {
   date_of_birth: string | null;
   assigned_agent_id: string | null;
   accepted_at: string | null;
+  call_initiated_at: string | null;
+  contact_verified_at: string | null;
+  contact_verified_phone: string | null;
+  contact_verification_method: "sms_otp" | null;
   kyc_started_at: string | null;
   kyc_completed_at: string | null;
   installed_at: string | null;
   kyc_outcome: string | null;
   airtel_sr_number: string | null;
   safaricom_imei: string | null;
+  registration_id: string | null;
+  /** Flat install commission (KSh) when status is installed. */
+  commission_earned_ksh?: number | null;
   metadata?: Record<string, unknown>;
 };
 
 export type LeadOutcomeAction =
+  | "call_started"
   | "kyc_started"
   | "kyc_completed"
   | "unreachable"

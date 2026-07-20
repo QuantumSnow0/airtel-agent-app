@@ -84,6 +84,7 @@ export async function setDispatchAvailability(
       agent_id: agentId,
       is_available: isAvailable,
       last_available_at: isAvailable ? now : undefined,
+      last_seen_at: isAvailable ? now : undefined,
       updated_at: now,
     },
     { onConflict: "agent_id" },
@@ -122,6 +123,7 @@ export async function fetchAssignedLeads(
       "assigned",
       "kyc_in_progress",
       "kyc_completed",
+      "pending_install",
       "installed",
     ])
     .order("updated_at", { ascending: false });

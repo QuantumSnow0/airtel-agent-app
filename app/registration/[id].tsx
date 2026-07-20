@@ -271,7 +271,7 @@ export default function RegistrationDetailScreen() {
                 <Text style={styles.sectionTitle}>Sync</Text>
                 <View style={styles.infoCard}>
                   <DetailRow
-                    label="MS Forms"
+                    label="Carrier submission"
                     value={
                       detail.syncStatus === "synced"
                         ? "Synced"

@@ -48,10 +48,13 @@ function isOfferExpired(expiresAt: string): boolean {
   return new Date(expiresAt).getTime() <= Date.now();
 }
 
-/** Single ping — sound + haptics (foreground) or OS reminder (background). */
-export async function playLeadOfferPing(offerId?: string): Promise<void> {
+/** Single ping — sound + haptics (foreground) or OS reminder (background, repeats only). */
+export async function playLeadOfferPing(
+  offerId?: string,
+  options?: { osReminder?: boolean },
+): Promise<void> {
   if (AppState.currentState !== "active") {
-    if (offerId) {
+    if (offerId && options?.osReminder) {
       void presentLeadOfferReminder(offerId);
     }
     return;
@@ -111,7 +114,7 @@ export function startLeadOfferAlertLoop(
       return;
     }
 
-    void playLeadOfferPing(activeOfferId);
+    void playLeadOfferPing(activeOfferId, { osReminder: true });
     repromptModal?.();
   }, LEAD_OFFER_ALERT_INTERVAL_MS);
 }

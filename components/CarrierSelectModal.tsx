@@ -11,6 +11,7 @@ import {
   scaleHeight,
   scaleWidth,
 } from "../lib/utils/responsive";
+import { AFFILIATION_DISCLAIMER } from "../constants/legal";
 
 type CarrierSelectModalProps = {
   visible: boolean;
@@ -50,7 +51,7 @@ export function CarrierSelectModal({
             </View>
             <View style={styles.optionTextWrap}>
               <Text style={styles.optionTitle}>Airtel</Text>
-              <Text style={styles.optionDesc}>SmartConnect registration</Text>
+              <Text style={styles.optionDesc}>5G / home internet registration</Text>
             </View>
             <Text style={styles.chevron}>›</Text>
           </TouchableOpacity>
@@ -77,6 +78,8 @@ export function CarrierSelectModal({
           >
             <Text style={styles.cancelText}>Cancel</Text>
           </TouchableOpacity>
+
+          <Text style={styles.disclaimer}>{AFFILIATION_DISCLAIMER}</Text>
         </View>
       </Pressable>
     </Modal>
@@ -199,5 +202,14 @@ const styles = StyleSheet.create({
     fontSize: scaleFont(15),
     fontFamily: "Inter_500Medium",
     color: "#0066CC",
+  },
+  disclaimer: {
+    fontSize: scaleFont(11),
+    fontFamily: "Inter_400Regular",
+    color: "#888888",
+    lineHeight: scaleFont(16),
+    textAlign: "center",
+    marginTop: scaleHeight(8),
+    paddingHorizontal: scaleWidth(4),
   },
 });

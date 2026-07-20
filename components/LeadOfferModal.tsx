@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Animated,
   Modal,
+  PanResponder,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -9,12 +12,15 @@ import {
   View,
 } from "react-native";
 import { MaterialIcons } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
 import {
   scaleFont,
   scaleHeight,
   scaleWidth,
 } from "../lib/utils/responsive";
 import type { LeadOffer, LeadOfferPreview } from "../lib/dispatch/types";
+import { humanizePackageLabel } from "../lib/notifications/leadOfferCopy";
+import { LEAD_INSTALL_COMMISSION_KES } from "../lib/commissions/leadInstallCommission";
 import {
   acceptLeadOffer,
   declineLeadOffer,
@@ -22,11 +28,18 @@ import {
 
 const AIRTEL = "#E60012";
 const SAFARICOM = "#00A651";
-const WAM_BLUE = "#0066CC";
+const INK = "#0F172A";
+const MUTED = "#64748B";
+const TRACK_H = scaleHeight(58);
+const KNOB = scaleWidth(52);
+const TRACK_PAD = scaleWidth(3);
+const COMPLETE_RATIO = 0.82;
 
 type LeadOfferModalProps = {
   visible: boolean;
   offer: LeadOffer | null;
+  queueIndex?: number;
+  queueTotal?: number;
   /** Tap outside / back — hides sheet; alert loop keeps pinging until accept or decline. */
   onDismiss: () => void;
   onExpired: () => void;
@@ -40,7 +53,7 @@ function formatCountdown(expiresAt: string): {
   expired: boolean;
 } {
   const ms = new Date(expiresAt).getTime() - Date.now();
-  if (ms <= 0) return { label: "Expired", urgent: true, expired: true };
+  if (ms <= 0) return { label: "0:00", urgent: true, expired: true };
   const mins = Math.floor(ms / 60000);
   const secs = Math.floor((ms % 60000) / 1000);
   return {
@@ -50,24 +63,202 @@ function formatCountdown(expiresAt: string): {
   };
 }
 
-function InfoChip({
-  icon,
+function DetailRow({
   label,
   value,
 }: {
-  icon: keyof typeof MaterialIcons.glyphMap;
   label: string;
   value: string;
 }) {
   return (
-    <View style={styles.chip}>
-      <MaterialIcons name={icon} size={scaleWidth(16)} color={WAM_BLUE} />
-      <View style={styles.chipTextWrap}>
-        <Text style={styles.chipLabel}>{label}</Text>
-        <Text style={styles.chipValue} numberOfLines={2}>
-          {value}
-        </Text>
-      </View>
+    <View style={styles.detailRow}>
+      <Text style={styles.detailLabel}>{label}</Text>
+      <Text style={styles.detailValue} numberOfLines={2}>
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+function SwipeToAccept({
+  brandColor,
+  disabled,
+  loading,
+  expired,
+  onAccept,
+}: {
+  brandColor: string;
+  disabled: boolean;
+  loading: boolean;
+  expired: boolean;
+  onAccept: () => void;
+}) {
+  const [trackWidth, setTrackWidth] = useState(0);
+  const dragX = useRef(new Animated.Value(0)).current;
+  const completedRef = useRef(false);
+  const maxXRef = useRef(0);
+  const startXRef = useRef(0);
+  const onAcceptRef = useRef(onAccept);
+  const lockedRef = useRef(disabled || loading || expired);
+
+  onAcceptRef.current = onAccept;
+  lockedRef.current = disabled || loading || expired;
+
+  const maxX = Math.max(0, trackWidth - KNOB - TRACK_PAD * 2);
+  maxXRef.current = maxX;
+
+  useEffect(() => {
+    completedRef.current = false;
+    dragX.setValue(0);
+  }, [dragX, expired, disabled, loading]);
+
+  const fillWidth = dragX.interpolate({
+    inputRange: [0, Math.max(maxX, 1)],
+    outputRange: [KNOB + TRACK_PAD * 2, Math.max(trackWidth, KNOB)],
+    extrapolate: "clamp",
+  });
+
+  const labelOpacity = dragX.interpolate({
+    inputRange: [0, Math.max(maxX * 0.45, 1)],
+    outputRange: [1, 0],
+    extrapolate: "clamp",
+  });
+
+  const chevronOpacity = dragX.interpolate({
+    inputRange: [0, Math.max(maxX * 0.2, 1), Math.max(maxX * 0.55, 1)],
+    outputRange: [0.55, 0.85, 0],
+    extrapolate: "clamp",
+  });
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => !lockedRef.current,
+      onMoveShouldSetPanResponder: (_, g) =>
+        !lockedRef.current && Math.abs(g.dx) > 4,
+      onPanResponderGrant: () => {
+        dragX.stopAnimation((value) => {
+          startXRef.current = typeof value === "number" ? value : 0;
+        });
+        if (Platform.OS !== "web") {
+          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        }
+      },
+      onPanResponderMove: (_, g) => {
+        if (completedRef.current || lockedRef.current) return;
+        const next = Math.min(
+          maxXRef.current,
+          Math.max(0, startXRef.current + g.dx),
+        );
+        dragX.setValue(next);
+        if (maxXRef.current > 0 && next >= maxXRef.current * COMPLETE_RATIO) {
+          if (completedRef.current) return;
+          completedRef.current = true;
+          Animated.timing(dragX, {
+            toValue: maxXRef.current,
+            duration: 120,
+            useNativeDriver: false,
+          }).start(() => {
+            if (Platform.OS !== "web") {
+              void Haptics.notificationAsync(
+                Haptics.NotificationFeedbackType.Success,
+              );
+            }
+            onAcceptRef.current();
+          });
+        }
+      },
+      onPanResponderRelease: (_, g) => {
+        if (completedRef.current) return;
+        const next = Math.min(
+          maxXRef.current,
+          Math.max(0, startXRef.current + g.dx),
+        );
+        if (maxXRef.current > 0 && next >= maxXRef.current * COMPLETE_RATIO) {
+          completedRef.current = true;
+          Animated.timing(dragX, {
+            toValue: maxXRef.current,
+            duration: 120,
+            useNativeDriver: false,
+          }).start(() => {
+            if (Platform.OS !== "web") {
+              void Haptics.notificationAsync(
+                Haptics.NotificationFeedbackType.Success,
+              );
+            }
+            onAcceptRef.current();
+          });
+          return;
+        }
+        if (Platform.OS !== "web") {
+          void Haptics.selectionAsync();
+        }
+        Animated.spring(dragX, {
+          toValue: 0,
+          friction: 7,
+          tension: 80,
+          useNativeDriver: false,
+        }).start();
+      },
+      onPanResponderTerminate: () => {
+        if (!completedRef.current) {
+          Animated.spring(dragX, {
+            toValue: 0,
+            friction: 7,
+            tension: 80,
+            useNativeDriver: false,
+          }).start();
+        }
+      },
+    }),
+  ).current;
+
+  return (
+    <View
+      style={[styles.swipeTrack, (disabled || expired) && styles.swipeDisabled]}
+      onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width)}
+      {...panResponder.panHandlers}
+    >
+      <Animated.View
+        style={[
+          styles.swipeFill,
+          { backgroundColor: brandColor, width: fillWidth },
+        ]}
+      />
+
+      <Animated.Text style={[styles.swipeLabel, { opacity: labelOpacity }]}>
+        {expired
+          ? "Offer expired"
+          : loading
+            ? "Accepting…"
+            : `Swipe · pocket KSh ${LEAD_INSTALL_COMMISSION_KES.toLocaleString()}`}
+      </Animated.Text>
+
+      <Animated.View style={[styles.swipeChevrons, { opacity: chevronOpacity }]}>
+        <MaterialIcons name="chevron-right" size={scaleWidth(18)} color={MUTED} />
+        <MaterialIcons
+          name="chevron-right"
+          size={scaleWidth(18)}
+          color={MUTED}
+          style={{ marginLeft: -scaleWidth(10) }}
+        />
+      </Animated.View>
+
+      <Animated.View
+        style={[
+          styles.swipeKnob,
+          { backgroundColor: brandColor, transform: [{ translateX: dragX }] },
+        ]}
+      >
+        {loading ? (
+          <ActivityIndicator color="#FFFFFF" />
+        ) : (
+          <MaterialIcons
+            name={expired ? "timer-off" : "arrow-forward"}
+            size={scaleWidth(22)}
+            color="#FFFFFF"
+          />
+        )}
+      </Animated.View>
     </View>
   );
 }
@@ -75,6 +266,8 @@ function InfoChip({
 export function LeadOfferModal({
   visible,
   offer,
+  queueIndex = 0,
+  queueTotal = 0,
   onDismiss,
   onExpired,
   onDeclined,
@@ -84,12 +277,58 @@ export function LeadOfferModal({
   const [loading, setLoading] = useState<"accept" | "decline" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const expiredHandledRef = useRef(false);
+  const slideAnim = useRef(new Animated.Value(40)).current;
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const pulseAnim = useRef(new Animated.Value(1)).current;
 
   const preview = (offer?.preview_payload ?? {}) as LeadOfferPreview;
   const isSafaricom = preview.product === "safaricom";
   const brandColor = isSafaricom ? SAFARICOM : AIRTEL;
   const brandLabel = isSafaricom ? "Safaricom" : "Airtel";
-  const brandLetter = isSafaricom ? "S" : "A";
+
+  useEffect(() => {
+    if (!visible || !offer) {
+      expiredHandledRef.current = false;
+      slideAnim.setValue(40);
+      fadeAnim.setValue(0);
+      setLoading(null);
+      setError(null);
+      return;
+    }
+    Animated.parallel([
+      Animated.spring(slideAnim, {
+        toValue: 0,
+        friction: 9,
+        tension: 70,
+        useNativeDriver: true,
+      }),
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 220,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [visible, offer, slideAnim, fadeAnim]);
+
+  useEffect(() => {
+    if (!visible || !offer) return;
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 1.06,
+          duration: 700,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 700,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [visible, offer, pulseAnim]);
 
   useEffect(() => {
     if (!visible || !offer) {
@@ -110,16 +349,13 @@ export function LeadOfferModal({
   }, [visible, offer, onExpired]);
 
   const locationLine = useMemo(() => {
-    const parts = [
-      preview.installationTown,
-      preview.roughArea,
-      preview.county,
-    ].filter(Boolean);
-    return parts.join(" · ") || "Location shared after accept";
+    const parts = [preview.roughArea, preview.installationTown].filter(Boolean);
+    if (parts.length) return parts.join(", ");
+    return preview.county || "Nearby area";
   }, [preview]);
 
   const handleAccept = async () => {
-    if (!offer) return;
+    if (!offer || loading) return;
     setLoading("accept");
     setError(null);
     const result = await acceptLeadOffer(offer.id);
@@ -148,121 +384,130 @@ export function LeadOfferModal({
     <Modal
       visible={visible}
       transparent
-      animationType="slide"
+      animationType="fade"
       onRequestClose={onDismiss}
     >
       <Pressable style={styles.backdrop} onPress={onDismiss}>
-        <View style={styles.sheet} onStartShouldSetResponder={() => true}>
+        <Animated.View
+          style={[
+            styles.sheet,
+            {
+              opacity: fadeAnim,
+              transform: [{ translateY: slideAnim }],
+            },
+          ]}
+          onStartShouldSetResponder={() => true}
+        >
+          <View style={[styles.brandBar, { backgroundColor: brandColor }]} />
+
           <View style={styles.handle} />
 
-          {/* Branded header */}
-          <View style={[styles.hero, { backgroundColor: brandColor }]}>
-            <View style={styles.heroTop}>
-              <View style={styles.brandBadge}>
-                <Text style={styles.brandLetter}>{brandLetter}</Text>
-              </View>
-              <View style={styles.heroTextWrap}>
-                <Text style={styles.heroEyebrow}>Incoming lead</Text>
-                <Text style={styles.heroTitle}>{brandLabel} customer nearby</Text>
-              </View>
-              <View
+          <View style={styles.topRow}>
+            <View style={styles.topCopy}>
+              <Text style={[styles.brandTag, { color: brandColor }]}>
+                {queueTotal > 1
+                  ? `${brandLabel} · ${queueIndex}/${queueTotal}`
+                  : `${brandLabel} lead`}
+              </Text>
+              <Text style={styles.headline}>New customer nearby</Text>
+            </View>
+
+            <Animated.View
+              style={[
+                styles.timerRing,
+                countdown.urgent && styles.timerRingUrgent,
+                { transform: [{ scale: pulseAnim }] },
+              ]}
+            >
+              <Text
                 style={[
-                  styles.timerBadge,
-                  countdown.urgent && styles.timerBadgeUrgent,
+                  styles.timerValue,
+                  countdown.urgent && styles.timerValueUrgent,
                 ]}
               >
-                <MaterialIcons
-                  name="timer"
-                  size={scaleWidth(14)}
-                  color="#FFFFFF"
-                />
-                <Text style={styles.timerBadgeText}>{countdown.label}</Text>
+                {countdown.label}
+              </Text>
+              <Text style={styles.timerHint}>left</Text>
+            </Animated.View>
+          </View>
+
+          <Text style={styles.location}>{locationLine}</Text>
+          <Text style={styles.unlockHint}>
+            Accept to unlock name, phone & full address
+          </Text>
+
+          <View style={styles.earnBanner}>
+            <View style={styles.earnShine} />
+            <View style={styles.earnLeft}>
+              <Text style={styles.earnEyebrow}>Yours on install</Text>
+              <View style={styles.earnAmountRow}>
+                <Text style={styles.earnCurrency}>KSh</Text>
+                <Text style={styles.earnAmount}>
+                  {LEAD_INSTALL_COMMISSION_KES.toLocaleString()}
+                </Text>
               </View>
             </View>
-            <Text style={styles.heroSub}>
-              Accept to unlock name, phone & full address
-            </Text>
+            <View style={styles.earnBadge}>
+              <MaterialIcons
+                name="trending-up"
+                size={scaleWidth(16)}
+                color="#92400E"
+              />
+              <Text style={styles.earnBadgeText}>Earn</Text>
+            </View>
           </View>
 
-          <View style={styles.body}>
-            <View style={styles.privacyRow}>
-              <MaterialIcons name="lock-outline" size={scaleWidth(18)} color="#666" />
-              <Text style={styles.privacyText}>
-                Customer identity is hidden until you accept
-              </Text>
-            </View>
-
-            <View style={styles.chipGrid}>
-              <InfoChip icon="place" label="Area" value={locationLine} />
-              {preview.packageLabel ? (
-                <InfoChip
-                  icon="inventory-2"
-                  label="Package"
-                  value={preview.packageLabel}
-                />
-              ) : null}
-              {preview.distanceKm != null ? (
-                <InfoChip
-                  icon="near-me"
-                  label="Distance"
-                  value={`~${preview.distanceKm} km from you`}
-                />
-              ) : null}
-              {preview.submittedAgoMinutes != null ? (
-                <InfoChip
-                  icon="schedule"
-                  label="Submitted"
-                  value={
-                    preview.submittedAgoMinutes < 1
-                      ? "Just now"
-                      : `${preview.submittedAgoMinutes} min ago`
-                  }
-                />
-              ) : null}
-            </View>
-
-            {error ? <Text style={styles.errorText}>{error}</Text> : null}
-
-            <TouchableOpacity
-              style={[
-                styles.acceptBtn,
-                { backgroundColor: brandColor },
-                (loading || countdown.expired) && styles.acceptBtnDisabled,
-              ]}
-              onPress={handleAccept}
-              disabled={!!loading || countdown.expired}
-              activeOpacity={0.88}
-            >
-              {loading === "accept" ? (
-                <ActivityIndicator color="#FFFFFF" />
-              ) : (
-                <>
-                  <MaterialIcons
-                    name="check-circle"
-                    size={scaleWidth(22)}
-                    color="#FFFFFF"
-                  />
-                  <Text style={styles.acceptBtnText}>
-                    {countdown.expired ? "Offer expired" : "Accept & view details"}
-                  </Text>
-                </>
-              )}
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.declineBtn}
-              onPress={handleDecline}
-              disabled={!!loading}
-              activeOpacity={0.7}
-            >
-              {loading === "decline" ? (
-                <ActivityIndicator color={WAM_BLUE} />
-              ) : (
-                <Text style={styles.declineBtnText}>Decline offer</Text>
-              )}
-            </TouchableOpacity>
+          <View style={styles.details}>
+            {preview.packageLabel ? (
+              <DetailRow
+                label="Package"
+                value={humanizePackageLabel(preview.packageLabel)}
+              />
+            ) : null}
+            {preview.distanceKm != null ? (
+              <DetailRow
+                label="Distance"
+                value={`About ${preview.distanceKm} km from you`}
+              />
+            ) : null}
+            {preview.submittedAgoMinutes != null ? (
+              <DetailRow
+                label="Requested"
+                value={
+                  preview.submittedAgoMinutes < 1
+                    ? "Just now"
+                    : `${preview.submittedAgoMinutes} min ago`
+                }
+              />
+            ) : null}
+            {preview.county ? (
+              <DetailRow label="County" value={String(preview.county)} />
+            ) : null}
           </View>
-        </View>
+
+          {error ? <Text style={styles.errorText}>{error}</Text> : null}
+
+          <SwipeToAccept
+            brandColor={brandColor}
+            disabled={!!loading || countdown.expired}
+            loading={loading === "accept"}
+            expired={countdown.expired}
+            onAccept={() => void handleAccept()}
+          />
+
+          <TouchableOpacity
+            style={styles.declineBtn}
+            onPress={handleDecline}
+            disabled={!!loading}
+            activeOpacity={0.7}
+          >
+            {loading === "decline" ? (
+              <ActivityIndicator color={MUTED} />
+            ) : (
+              <Text style={styles.declineBtnText}>Decline</Text>
+            )}
+          </TouchableOpacity>
+        </Animated.View>
       </Pressable>
     </Modal>
   );
@@ -271,147 +516,183 @@ export function LeadOfferModal({
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    backgroundColor: "rgba(15, 23, 42, 0.45)",
     justifyContent: "flex-end",
   },
   sheet: {
     backgroundColor: "#FFFFFF",
-    borderTopLeftRadius: scaleWidth(24),
-    borderTopRightRadius: scaleWidth(24),
+    borderTopLeftRadius: scaleWidth(28),
+    borderTopRightRadius: scaleWidth(28),
+    paddingHorizontal: scaleWidth(22),
+    paddingBottom: scaleHeight(30),
     overflow: "hidden",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 16,
-    elevation: 20,
+  },
+  brandBar: {
+    height: scaleHeight(5),
+    marginHorizontal: -scaleWidth(22),
   },
   handle: {
     alignSelf: "center",
-    width: scaleWidth(44),
+    width: scaleWidth(36),
     height: scaleHeight(4),
     borderRadius: 2,
-    backgroundColor: "rgba(255,255,255,0.5)",
-    position: "absolute",
-    top: scaleHeight(8),
-    zIndex: 2,
+    backgroundColor: "#E2E8F0",
+    marginTop: scaleHeight(10),
+    marginBottom: scaleHeight(18),
   },
-  hero: {
-    paddingTop: scaleHeight(28),
-    paddingHorizontal: scaleWidth(20),
-    paddingBottom: scaleHeight(18),
-  },
-  heroTop: {
+  topRow: {
     flexDirection: "row",
     alignItems: "flex-start",
+    justifyContent: "space-between",
     gap: scaleWidth(12),
+    marginBottom: scaleHeight(14),
   },
-  brandBadge: {
-    width: scaleWidth(48),
-    height: scaleWidth(48),
-    borderRadius: scaleWidth(14),
-    backgroundColor: "rgba(255,255,255,0.22)",
+  topCopy: {
+    flex: 1,
+    paddingTop: scaleHeight(4),
+  },
+  brandTag: {
+    fontFamily: "Inter_600SemiBold",
+    fontSize: scaleFont(12),
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
+    marginBottom: scaleHeight(4),
+  },
+  headline: {
+    fontFamily: "Poppins_700Bold",
+    fontSize: scaleFont(24),
+    color: INK,
+    lineHeight: scaleFont(30),
+  },
+  timerRing: {
+    width: scaleWidth(76),
+    height: scaleWidth(76),
+    borderRadius: scaleWidth(38),
+    borderWidth: 3,
+    borderColor: "#E2E8F0",
     alignItems: "center",
     justifyContent: "center",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.35)",
+    backgroundColor: "#F8FAFC",
   },
-  brandLetter: {
-    fontSize: scaleFont(22),
+  timerRingUrgent: {
+    borderColor: "#FCA5A5",
+    backgroundColor: "#FEF2F2",
+  },
+  timerValue: {
     fontFamily: "Poppins_700Bold",
-    color: "#FFFFFF",
+    fontSize: scaleFont(18),
+    color: INK,
   },
-  heroTextWrap: {
+  timerValueUrgent: {
+    color: "#DC2626",
+  },
+  timerHint: {
+    fontFamily: "Inter_500Medium",
+    fontSize: scaleFont(10),
+    color: MUTED,
+    marginTop: -2,
+  },
+  location: {
+    fontFamily: "Poppins_600SemiBold",
+    fontSize: scaleFont(17),
+    color: INK,
+    lineHeight: scaleFont(24),
+    marginBottom: scaleHeight(4),
+  },
+  unlockHint: {
+    fontFamily: "Inter_400Regular",
+    fontSize: scaleFont(13),
+    color: MUTED,
+    lineHeight: scaleFont(18),
+    marginBottom: scaleHeight(14),
+  },
+  earnBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFF7ED",
+    borderRadius: scaleWidth(16),
+    paddingVertical: scaleHeight(14),
+    paddingHorizontal: scaleWidth(16),
+    marginBottom: scaleHeight(16),
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "#FDBA74",
+  },
+  earnShine: {
+    position: "absolute",
+    top: -scaleHeight(20),
+    right: -scaleWidth(10),
+    width: scaleWidth(100),
+    height: scaleWidth(100),
+    borderRadius: scaleWidth(50),
+    backgroundColor: "rgba(251, 191, 36, 0.22)",
+  },
+  earnLeft: {
     flex: 1,
-    paddingTop: scaleHeight(2),
   },
-  heroEyebrow: {
-    fontSize: scaleFont(11),
+  earnEyebrow: {
     fontFamily: "Inter_600SemiBold",
-    color: "rgba(255,255,255,0.85)",
-    textTransform: "uppercase",
-    letterSpacing: 0.8,
+    fontSize: scaleFont(12),
+    color: "#B45309",
     marginBottom: scaleHeight(2),
   },
-  heroTitle: {
-    fontSize: scaleFont(18),
-    fontFamily: "Poppins_600SemiBold",
-    color: "#FFFFFF",
-    lineHeight: scaleFont(24),
+  earnAmountRow: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: scaleWidth(6),
   },
-  timerBadge: {
+  earnCurrency: {
+    fontFamily: "Poppins_600SemiBold",
+    fontSize: scaleFont(16),
+    color: "#92400E",
+  },
+  earnAmount: {
+    fontFamily: "Poppins_700Bold",
+    fontSize: scaleFont(32),
+    color: "#78350F",
+    lineHeight: scaleFont(38),
+  },
+  earnBadge: {
     flexDirection: "row",
     alignItems: "center",
     gap: scaleWidth(4),
-    backgroundColor: "rgba(0,0,0,0.2)",
+    backgroundColor: "#FDE68A",
     paddingHorizontal: scaleWidth(10),
     paddingVertical: scaleHeight(6),
-    borderRadius: scaleWidth(20),
-  },
-  timerBadgeUrgent: {
-    backgroundColor: "rgba(0,0,0,0.45)",
-  },
-  timerBadgeText: {
-    fontSize: scaleFont(13),
-    fontFamily: "Inter_600SemiBold",
-    color: "#FFFFFF",
-  },
-  heroSub: {
-    marginTop: scaleHeight(12),
-    fontSize: scaleFont(13),
-    fontFamily: "Inter_400Regular",
-    color: "rgba(255,255,255,0.9)",
-    lineHeight: scaleFont(18),
-  },
-  body: {
-    paddingHorizontal: scaleWidth(20),
-    paddingTop: scaleHeight(16),
-    paddingBottom: scaleHeight(28),
-  },
-  privacyRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: scaleWidth(8),
-    backgroundColor: "#F5F7FA",
-    paddingHorizontal: scaleWidth(12),
-    paddingVertical: scaleHeight(10),
     borderRadius: scaleWidth(10),
-    marginBottom: scaleHeight(14),
   },
-  privacyText: {
-    flex: 1,
-    fontSize: scaleFont(12),
-    fontFamily: "Inter_500Medium",
-    color: "#555555",
+  earnBadgeText: {
+    fontFamily: "Poppins_700Bold",
+    fontSize: scaleFont(13),
+    color: "#92400E",
   },
-  chipGrid: {
-    gap: scaleHeight(10),
-    marginBottom: scaleHeight(18),
+  details: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "#E2E8F0",
+    paddingTop: scaleHeight(4),
+    marginBottom: scaleHeight(20),
   },
-  chip: {
+  detailRow: {
     flexDirection: "row",
     alignItems: "flex-start",
-    gap: scaleWidth(10),
-    backgroundColor: "#FFFFFF",
-    borderWidth: 1,
-    borderColor: "#E8ECF0",
-    borderRadius: scaleWidth(12),
-    padding: scaleWidth(12),
+    justifyContent: "space-between",
+    gap: scaleWidth(16),
+    paddingVertical: scaleHeight(11),
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "#F1F5F9",
   },
-  chipTextWrap: {
-    flex: 1,
-  },
-  chipLabel: {
-    fontSize: scaleFont(11),
+  detailLabel: {
     fontFamily: "Inter_500Medium",
-    color: "#888888",
-    textTransform: "uppercase",
-    letterSpacing: 0.4,
-    marginBottom: scaleHeight(2),
+    fontSize: scaleFont(13),
+    color: MUTED,
+    width: scaleWidth(88),
   },
-  chipValue: {
-    fontSize: scaleFont(14),
+  detailValue: {
+    flex: 1,
+    textAlign: "right",
     fontFamily: "Inter_600SemiBold",
-    color: "#1A1A1A",
+    fontSize: scaleFont(14),
+    color: INK,
     lineHeight: scaleFont(20),
   },
   errorText: {
@@ -421,34 +702,61 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginBottom: scaleHeight(10),
   },
-  acceptBtn: {
-    flexDirection: "row",
-    alignItems: "center",
+  swipeTrack: {
+    height: TRACK_H,
+    borderRadius: TRACK_H / 2,
+    backgroundColor: "#F1F5F9",
     justifyContent: "center",
-    gap: scaleWidth(8),
-    borderRadius: scaleWidth(14),
-    paddingVertical: scaleHeight(16),
-    marginBottom: scaleHeight(8),
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
-    elevation: 4,
+    overflow: "hidden",
+    marginBottom: scaleHeight(6),
   },
-  acceptBtnDisabled: {
+  swipeDisabled: {
     opacity: 0.55,
   },
-  acceptBtnText: {
-    color: "#FFFFFF",
-    fontSize: scaleFont(16),
+  swipeFill: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    bottom: 0,
+    borderRadius: TRACK_H / 2,
+    opacity: 0.18,
+  },
+  swipeLabel: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    textAlign: "center",
     fontFamily: "Poppins_600SemiBold",
+    fontSize: scaleFont(15),
+    color: MUTED,
+    paddingLeft: KNOB * 0.35,
+  },
+  swipeChevrons: {
+    position: "absolute",
+    right: scaleWidth(18),
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  swipeKnob: {
+    position: "absolute",
+    left: TRACK_PAD,
+    width: KNOB,
+    height: KNOB,
+    borderRadius: KNOB / 2,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
   },
   declineBtn: {
     alignItems: "center",
     paddingVertical: scaleHeight(12),
   },
   declineBtnText: {
-    color: WAM_BLUE,
+    color: MUTED,
     fontSize: scaleFont(15),
     fontFamily: "Inter_500Medium",
   },

@@ -20,3 +20,20 @@ export const LEAD_OFFER_SOUND_FILENAME = "lead_offer.wav";
 
 /** In-app playback (expo-av) while the app is open. */
 export const LEAD_OFFER_SOUND_ASSET = require("../../assets/sounds/lead_offer.wav");
+
+/**
+ * OS / push notification sound (background, killed app).
+ * Must match app.json expo-notifications `sounds` and send-push-notification edge function.
+ */
+export const PUSH_LEAD_OFFER_SOUND_FILENAME = "lead_push_alert";
+
+/** Android notification channel — bump suffix when sound/importance was poisoned on devices. */
+export const ANDROID_LEAD_OFFER_CHANNEL_ID = "wam_lead_offers_v9";
+
+export const LEGACY_LEAD_OFFER_CHANNEL_IDS = [
+  "wam_lead_offers_v3",
+  "wam_lead_offers_v5",
+  "wam_lead_offers_v6",
+  "wam_lead_offers_v7",
+  "wam_lead_offers_v8",
+] as const;

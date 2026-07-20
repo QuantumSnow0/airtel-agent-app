@@ -2,11 +2,7 @@
  * Global lead-offer listener (v1).
  * Shows modal when a new offer arrives while the app is open.
  *
- * Triggers:
- *   1. leadOfferBridge (push foreground + realtime notification insert)
- *   2. Realtime INSERT on lead_offers (if publication enabled)
- *   3. App resume → poll active offers
- *   4. Active offers on launch
+ * Multiple pending offers are queued — after accept/decline/expiry the next opens.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -18,11 +14,24 @@ import {
   fetchOfferById,
 } from "../lib/services/leadDispatchService";
 import type { LeadOffer } from "../lib/dispatch/types";
-import { subscribeToLeadOfferPrompts } from "../lib/dispatch/leadOfferBridge";
+import {
+  subscribeToLeadOfferPrompts,
+  subscribeToLeadOfferQueueRefresh,
+} from "../lib/dispatch/leadOfferBridge";
 import {
   startLeadOfferAlertLoop,
   stopLeadOfferAlertLoop,
 } from "../lib/services/leadAlertService";
+import {
+  startAgentHeartbeat,
+  stopAgentHeartbeat,
+} from "../lib/services/agentHeartbeatService";
+import { dismissLeadOfferOsNotification } from "../lib/notifications/presentLeadOfferOsNotification";
+import {
+  buildLeadOfferPushDataFromOffer,
+  requestRichLeadOfferUpgrade,
+} from "../lib/notifications/leadOfferUpgradeService";
+import { activateAgentNotifications } from "../lib/services/pushNotificationService";
 import { LeadOfferModal } from "./LeadOfferModal";
 
 type LeadDispatchManagerProps = {
@@ -42,6 +51,13 @@ function rowToOffer(row: Record<string, unknown>): LeadOffer {
   };
 }
 
+function isOfferLive(offer: LeadOffer): boolean {
+  return (
+    offer.status === "offered" &&
+    new Date(offer.expires_at).getTime() > Date.now()
+  );
+}
+
 export function LeadDispatchManager({
   pendingOfferId,
   onPendingOfferHandled,
@@ -49,9 +65,11 @@ export function LeadDispatchManager({
   const router = useRouter();
   const [modalOffer, setModalOffer] = useState<LeadOffer | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
+  const [queueTotal, setQueueTotal] = useState(0);
+  const [queueIndex, setQueueIndex] = useState(0);
   const agentIdRef = useRef<string | null>(null);
   const channelsRef = useRef<ReturnType<typeof supabase.channel>[]>([]);
-  const lastPromptedOfferIdRef = useRef<string | null>(null);
+  const offerQueueRef = useRef<LeadOffer[]>([]);
   const modalVisibleRef = useRef(false);
   const pendingPromptRef = useRef<string | null | undefined>(undefined);
 
@@ -59,47 +77,108 @@ export function LeadDispatchManager({
     modalVisibleRef.current = modalVisible;
   }, [modalVisible]);
 
-  const showOffer = useCallback((offer: LeadOffer) => {
-    if (offer.status !== "offered") return;
-    if (new Date(offer.expires_at).getTime() <= Date.now()) return;
-    if (
-      lastPromptedOfferIdRef.current === offer.id &&
-      modalVisibleRef.current
-    ) {
-      return;
-    }
-
-    lastPromptedOfferIdRef.current = offer.id;
-    setModalOffer(offer);
-    setModalVisible(true);
-
-    startLeadOfferAlertLoop(offer.id, offer.expires_at, () => {
-      setModalOffer((current) => current ?? offer);
-      setModalVisible(true);
-    });
+  const syncQueueState = useCallback((queue: LeadOffer[], index: number) => {
+    offerQueueRef.current = queue;
+    setQueueTotal(queue.length);
+    setQueueIndex(queue.length > 0 ? index + 1 : 0);
   }, []);
+
+  const presentQueueOffer = useCallback(
+    (queue: LeadOffer[], index: number) => {
+      if (AppState.currentState !== "active") return;
+
+      const offer = queue[index];
+      if (!offer || !isOfferLive(offer)) return;
+
+      syncQueueState(queue, index);
+      setModalOffer(offer);
+      setModalVisible(true);
+
+      startLeadOfferAlertLoop(offer.id, offer.expires_at, () => {
+        setModalOffer((current) => current ?? offer);
+        setModalVisible(true);
+      });
+    },
+    [syncQueueState],
+  );
 
   const clearOffer = useCallback(() => {
     stopLeadOfferAlertLoop();
     setModalVisible(false);
     setModalOffer(null);
-    lastPromptedOfferIdRef.current = null;
+    offerQueueRef.current = [];
+    setQueueTotal(0);
+    setQueueIndex(0);
   }, []);
+
+  const refreshAndPresentQueue = useCallback(
+    async (agentId: string, preferredOfferId?: string | null) => {
+      const { offers } = await fetchActiveOffers(agentId);
+      let live = offers.filter(isOfferLive);
+
+      if (live.length === 0 && preferredOfferId) {
+        const { offer } = await fetchOfferById(agentId, preferredOfferId);
+        if (offer && isOfferLive(offer)) {
+          live = [offer];
+        }
+      }
+
+      if (live.length === 0) {
+        clearOffer();
+        return;
+      }
+
+      let startIndex = 0;
+      if (preferredOfferId) {
+        const idx = live.findIndex((o) => o.id === preferredOfferId);
+        if (idx >= 0) startIndex = idx;
+      }
+
+      const rotated = [
+        ...live.slice(startIndex),
+        ...live.slice(0, startIndex),
+      ];
+      presentQueueOffer(rotated, 0);
+    },
+    [clearOffer, presentQueueOffer],
+  );
+
+  const advanceQueue = useCallback(async () => {
+    const agentId = agentIdRef.current;
+    if (!agentId) {
+      clearOffer();
+      return;
+    }
+
+    if (modalOffer?.id) {
+      void dismissLeadOfferOsNotification(modalOffer.id);
+    }
+
+    await refreshAndPresentQueue(agentId);
+    if (offerQueueRef.current.length === 0) {
+      clearOffer();
+    }
+  }, [clearOffer, modalOffer?.id, refreshAndPresentQueue]);
+
+  const silentRefreshQueue = useCallback(
+    async (agentId: string) => {
+      stopLeadOfferAlertLoop();
+      const { offers } = await fetchActiveOffers(agentId);
+      const live = offers.filter(isOfferLive);
+      offerQueueRef.current = live;
+      setQueueTotal(live.length);
+      setQueueIndex(0);
+      setModalVisible(false);
+      setModalOffer(null);
+    },
+    [],
+  );
 
   const openOfferById = useCallback(
     async (agentId: string, offerId: string) => {
-      const { offer } = await fetchOfferById(agentId, offerId);
-      if (offer) showOffer(offer);
+      await refreshAndPresentQueue(agentId, offerId);
     },
-    [showOffer],
-  );
-
-  const showLatestActiveOffer = useCallback(
-    async (agentId: string) => {
-      const { offers } = await fetchActiveOffers(agentId);
-      if (offers.length > 0) showOffer(offers[0]);
-    },
-    [showOffer],
+    [refreshAndPresentQueue],
   );
 
   const handlePrompt = useCallback(
@@ -110,13 +189,14 @@ export function LeadDispatchManager({
         return;
       }
       pendingPromptRef.current = undefined;
-      if (offerId) {
-        await openOfferById(agentId, offerId);
-      } else {
-        await showLatestActiveOffer(agentId);
+
+      await refreshAndPresentQueue(agentId, offerId ?? undefined);
+      if (offerQueueRef.current.length === 0 && offerId) {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        await refreshAndPresentQueue(agentId, offerId);
       }
     },
-    [openOfferById, showLatestActiveOffer],
+    [refreshAndPresentQueue],
   );
 
   const teardownChannels = useCallback(() => {
@@ -138,8 +218,9 @@ export function LeadDispatchManager({
 
       agentIdRef.current = userId;
       teardownChannels();
+      startAgentHeartbeat(userId);
 
-      await showLatestActiveOffer(userId);
+      await refreshAndPresentQueue(userId);
 
       if (pendingPromptRef.current !== undefined) {
         const queued = pendingPromptRef.current;
@@ -160,28 +241,78 @@ export function LeadDispatchManager({
           (payload) => {
             const row = payload.new as Record<string, unknown>;
             if (row.status !== "offered") return;
-            showOffer(rowToOffer(row));
+            const offer = rowToOffer(row);
+            if (!isOfferLive(offer)) return;
+
+            // Background: hybrid FCM plays sound; Realtime upgrades to rich UI + buttons after delay.
+            if (AppState.currentState !== "active") {
+              requestRichLeadOfferUpgrade(
+                buildLeadOfferPushDataFromOffer(offer),
+              );
+              return;
+            }
+
+            if (modalVisibleRef.current) {
+              const exists = offerQueueRef.current.some((o) => o.id === offer.id);
+              if (!exists) {
+                const next = [...offerQueueRef.current, offer];
+                offerQueueRef.current = next;
+                setQueueTotal(next.length);
+              }
+              return;
+            }
+
+            void refreshAndPresentQueue(userId, offer.id);
           },
         )
         .subscribe((status) => {
           if (status === "SUBSCRIBED") {
             console.log("✅ lead_offers realtime subscribed");
+          } else if (
+            status === "CLOSED" ||
+            status === "CHANNEL_ERROR" ||
+            status === "TIMED_OUT"
+          ) {
+            console.warn("lead_offers realtime disconnected:", status);
+            const agentId = agentIdRef.current;
+            if (agentId) {
+              setTimeout(() => {
+                if (agentIdRef.current === agentId) {
+                  void setupForAgent(agentId);
+                }
+              }, 2_000);
+            }
           }
         });
 
       channelsRef.current = [offersChannel];
     },
-    [handlePrompt, showLatestActiveOffer, showOffer, teardownChannels],
+    [
+      handlePrompt,
+      refreshAndPresentQueue,
+      syncQueueState,
+      teardownChannels,
+    ],
   );
 
-  // Bridge: push foreground + notification realtime (from pushNotificationService)
   useEffect(() => {
     return subscribeToLeadOfferPrompts((offerId) => {
       void handlePrompt(offerId);
     });
   }, [handlePrompt]);
 
-  // Auth + realtime setup
+  useEffect(() => {
+    return subscribeToLeadOfferQueueRefresh((preferredOfferId, silent) => {
+      const agentId = agentIdRef.current;
+      if (!agentId) return;
+      if (silent) {
+        void silentRefreshQueue(agentId);
+      } else {
+        void refreshAndPresentQueue(agentId, preferredOfferId ?? undefined);
+      }
+    });
+  }, [refreshAndPresentQueue, silentRefreshQueue]);
+
   useEffect(() => {
     let mounted = true;
 
@@ -200,6 +331,7 @@ export function LeadDispatchManager({
     } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!mounted) return;
       teardownChannels();
+      stopAgentHeartbeat();
       agentIdRef.current = null;
       if (session?.user) {
         void setupForAgent(session.user.id);
@@ -210,20 +342,22 @@ export function LeadDispatchManager({
       mounted = false;
       subscription.unsubscribe();
       teardownChannels();
+      stopAgentHeartbeat();
       stopLeadOfferAlertLoop();
     };
   }, [setupForAgent, teardownChannels]);
 
-  // Returning to app — catch offers missed while backgrounded
   useEffect(() => {
     const onAppState = (next: AppStateStatus) => {
-      if (next === "active" && agentIdRef.current) {
-        void showLatestActiveOffer(agentIdRef.current);
+      const agentId = agentIdRef.current;
+      if (next === "active" && agentId) {
+        void refreshAndPresentQueue(agentId);
+        void activateAgentNotifications(agentId);
       }
     };
     const sub = AppState.addEventListener("change", onAppState);
     return () => sub.remove();
-  }, [showLatestActiveOffer]);
+  }, [refreshAndPresentQueue]);
 
   useEffect(() => {
     if (!pendingOfferId || !agentIdRef.current) return;
@@ -236,14 +370,21 @@ export function LeadDispatchManager({
     <LeadOfferModal
       visible={modalVisible}
       offer={modalOffer}
+      queueIndex={queueIndex}
+      queueTotal={queueTotal}
       onDismiss={() => setModalVisible(false)}
-      onExpired={clearOffer}
-      onDeclined={clearOffer}
+      onExpired={() => {
+        void advanceQueue();
+      }}
+      onDeclined={() => {
+        void advanceQueue();
+      }}
       onAccepted={(leadId) => {
         stopLeadOfferAlertLoop();
-        setModalVisible(false);
-        setModalOffer(null);
-        lastPromptedOfferIdRef.current = null;
+        if (modalOffer?.id) {
+          void dismissLeadOfferOsNotification(modalOffer.id);
+        }
+        clearOffer();
         router.push(`/lead/${leadId}` as any);
       }}
     />

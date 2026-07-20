@@ -8,7 +8,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFonts } from "expo-font";
 import { MaterialIcons } from "@expo/vector-icons";
@@ -21,27 +21,29 @@ import {
   Inter_500Medium,
   Inter_600SemiBold,
 } from "@expo-google-fonts/inter";
-import { supabase } from "../lib/supabase";
+import { supabase } from "../../lib/supabase";
 import {
   fetchActiveOffers,
   fetchAssignedLeads,
-} from "../lib/services/leadDispatchService";
-import type { InboundLead, LeadOffer, LeadOfferPreview } from "../lib/dispatch/types";
-import { LeadOfferModal } from "../components/LeadOfferModal";
+} from "../../lib/services/leadDispatchService";
+import type { InboundLead, LeadOffer, LeadOfferPreview } from "../../lib/dispatch/types";
+import { LeadOfferModal } from "../../components/LeadOfferModal";
 import {
   isLeadOfferAlertLoopActive,
   startLeadOfferAlertLoop,
   stopLeadOfferAlertLoop,
-} from "../lib/services/leadAlertService";
+} from "../../lib/services/leadAlertService";
 import {
   LEAD_STATUS_COLORS,
   formatLeadStatusLabel,
-} from "../constants/leadStatuses";
+} from "../../constants/leadStatuses";
+import { LEAD_INSTALL_COMMISSION_KES } from "../../lib/commissions/leadInstallCommission";
 import {
   scaleFont,
   scaleHeight,
   scaleWidth,
-} from "../lib/utils/responsive";
+} from "../../lib/utils/responsive";
+import { getWamTabBarOffset } from "../../components/WamTabBar";
 
 function OfferCard({
   offer,
@@ -148,6 +150,58 @@ export default function LeadsScreen() {
     loadData().finally(() => setLoading(false));
   }, [loadData]);
 
+  useFocusEffect(
+    useCallback(() => {
+      void loadData();
+    }, [loadData]),
+  );
+
+  // Keep offers + assigned list in sync without pull-to-refresh.
+  useEffect(() => {
+    let cancelled = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+
+    void (async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user || cancelled) return;
+
+      channel = supabase
+        .channel(`inbound-leads-list-${user.id}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "inbound_leads",
+            filter: `assigned_agent_id=eq.${user.id}`,
+          },
+          () => {
+            void loadData();
+          },
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "lead_offers",
+            filter: `agent_id=eq.${user.id}`,
+          },
+          () => {
+            void loadData();
+          },
+        )
+        .subscribe();
+    })();
+
+    return () => {
+      cancelled = true;
+      if (channel) void supabase.removeChannel(channel);
+    };
+  }, [loadData]);
+
   const onRefresh = async () => {
     setRefreshing(true);
     await loadData();
@@ -159,17 +213,13 @@ export default function LeadsScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-          <MaterialIcons name="arrow-back" size={scaleWidth(24)} color="#0066CC" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Inbound leads</Text>
-        <View style={styles.headerSpacer} />
+        <Text style={styles.headerTitle}>Leads</Text>
       </View>
 
       <ScrollView
         contentContainerStyle={[
           styles.content,
-          { paddingBottom: insets.bottom + 24 },
+          { paddingBottom: getWamTabBarOffset(insets.bottom) + scaleHeight(16) },
         ]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
@@ -228,7 +278,14 @@ export default function LeadsScreen() {
                     <View
                       style={[
                         styles.leadBrandDot,
-                        { backgroundColor: isSaf ? "#00A651" : "#E60012" },
+                        {
+                          backgroundColor:
+                            lead.status === "installed"
+                              ? "#4CAF50"
+                              : isSaf
+                                ? "#00A651"
+                                : "#E60012",
+                        },
                       ]}
                     />
                     <View style={styles.leadCardBody}>
@@ -242,6 +299,11 @@ export default function LeadsScreen() {
                       </View>
                       <Text style={styles.leadMeta}>
                         {isSaf ? "Safaricom" : "Airtel"} · {lead.installation_town}
+                        {lead.status === "installed"
+                          ? ` · KSh ${LEAD_INSTALL_COMMISSION_KES}`
+                          : lead.status === "pending_install"
+                            ? " · Pending review"
+                            : ""}
                       </Text>
                     </View>
                     <MaterialIcons name="chevron-right" size={scaleWidth(22)} color="#999" />
@@ -276,23 +338,17 @@ export default function LeadsScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F5F7FA" },
   header: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: scaleWidth(12),
-    paddingVertical: scaleHeight(12),
+    paddingHorizontal: scaleWidth(20),
+    paddingVertical: scaleHeight(14),
     backgroundColor: "#FFFFFF",
     borderBottomWidth: 1,
     borderBottomColor: "#EEEEEE",
   },
-  backBtn: { padding: scaleWidth(8) },
   headerTitle: {
-    flex: 1,
-    textAlign: "center",
-    fontSize: scaleFont(18),
-    fontFamily: "Poppins_600SemiBold",
+    fontSize: scaleFont(22),
+    fontFamily: "Poppins_700Bold",
     color: "#1A1A1A",
   },
-  headerSpacer: { width: scaleWidth(40) },
   content: { padding: scaleWidth(16) },
   sectionHead: {
     flexDirection: "row",

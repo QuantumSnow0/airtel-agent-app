@@ -2,13 +2,19 @@ import { supabase } from "../supabase";
 import { fetchCommissionRates } from "../services/commissionRatesService";
 import { getSafaricomCommissionKesForRegistration } from "./safaricomAgentCommission";
 import { computeAirtelInstalledCommissionKsh } from "./airtelWalletCommission";
+import { getLeadInstallCommissionKes } from "./leadInstallCommission";
 
-/** Full wallet total: Airtel installed + Safaricom installed (agent share). */
+/** Full wallet total: Airtel + Safaricom + inbound-lead installs. */
 export function computeCombinedWalletCommissionKsh(
   airtelInstalledCommissionKsh: number,
-  safaricomInstalledCommissionKsh: number
+  safaricomInstalledCommissionKsh: number,
+  leadInstallCommissionKsh = 0
 ): number {
-  return airtelInstalledCommissionKsh + safaricomInstalledCommissionKsh;
+  return (
+    airtelInstalledCommissionKsh +
+    safaricomInstalledCommissionKsh +
+    leadInstallCommissionKsh
+  );
 }
 
 /**
@@ -23,7 +29,8 @@ export async function fetchWalletCommissionKsh(agentId: string): Promise<number>
       "preferred_package, units_required, commission_package, commission_units"
     )
     .eq("agent_id", agentId)
-    .eq("status", "installed");
+    .eq("status", "installed")
+    .eq("commission_exempt", false);
 
   if (airtelErr) {
     console.warn("fetchWalletCommissionKsh airtel:", airtelErr);
@@ -62,5 +69,26 @@ export async function fetchWalletCommissionKsh(agentId: string): Promise<number>
     console.warn("fetchWalletCommissionKsh safaricom:", safErr);
   }
 
-  return computeCombinedWalletCommissionKsh(airtelKsh, safKsh);
+  const { data: leadRows, error: leadErr } = await supabase
+    .from("inbound_leads")
+    .select("commission_earned_ksh, status")
+    .eq("assigned_agent_id", agentId)
+    .eq("status", "installed");
+
+  let leadKsh = 0;
+  const leadMsg = String(leadErr?.message || "").toLowerCase();
+  if (!leadErr && leadRows?.length) {
+    leadKsh = leadRows.reduce(
+      (sum, row) => sum + getLeadInstallCommissionKes(row),
+      0
+    );
+  } else if (
+    leadErr &&
+    !leadMsg.includes("does not exist") &&
+    !leadMsg.includes("commission_earned")
+  ) {
+    console.warn("fetchWalletCommissionKsh leads:", leadErr);
+  }
+
+  return computeCombinedWalletCommissionKsh(airtelKsh, safKsh, leadKsh);
 }

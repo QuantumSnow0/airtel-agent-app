@@ -13,6 +13,7 @@
     },
     "preview": {
       "distribution": "internal",
+      "prebuildCommand": "node scripts/patch-lead-notifications-native.js && node scripts/verify-lead-notifications-native.js",
       "android": {
         "buildType": "apk"
       },
@@ -23,6 +24,7 @@
     },
     "production": {
       "distribution": "store",
+      "prebuildCommand": "node scripts/patch-lead-notifications-native.js && node scripts/verify-lead-notifications-native.js",
       "android": {
         "buildType": "app-bundle"
       },

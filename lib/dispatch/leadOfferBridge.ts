@@ -4,8 +4,13 @@
  */
 
 export type LeadOfferPromptHandler = (offerId: string | null) => void;
+export type LeadOfferQueueRefreshHandler = (
+  preferredOfferId: string | null,
+  silent?: boolean,
+) => void;
 
 const handlers = new Set<LeadOfferPromptHandler>();
+const refreshHandlers = new Set<LeadOfferQueueRefreshHandler>();
 let pendingPrompt: string | null | undefined;
 
 export function subscribeToLeadOfferPrompts(
@@ -37,6 +42,27 @@ export function promptLeadOfferModal(offerId: string | null): void {
       console.warn("leadOfferBridge handler error:", e);
     }
   }
+}
+
+/** Refresh queue after accept/decline from notification shade. silent=true hides modal. */
+export function refreshLeadOfferQueue(
+  preferredOfferId: string | null = null,
+  silent = false,
+): void {
+  for (const handler of refreshHandlers) {
+    try {
+      handler(preferredOfferId, silent);
+    } catch (e) {
+      console.warn("leadOfferBridge refresh handler error:", e);
+    }
+  }
+}
+
+export function subscribeToLeadOfferQueueRefresh(
+  handler: LeadOfferQueueRefreshHandler,
+): () => void {
+  refreshHandlers.add(handler);
+  return () => refreshHandlers.delete(handler);
 }
 
 function parseMetadata(
