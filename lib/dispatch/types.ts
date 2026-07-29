@@ -19,7 +19,8 @@ export type LeadStatus =
   | "needs_reassignment"
   | "admin_queue"
   | "lost"
-  | "expired";
+  | "expired"
+  | "deferred";
 
 export type OfferStatus =
   | "offered"
@@ -37,6 +38,7 @@ export type LeadOfferPreview = {
   packageLabel?: string | null;
   submittedAgoMinutes?: number;
   distanceKm?: number | null;
+  isCallbackReminder?: boolean;
 };
 
 export type LeadOffer = {
@@ -72,6 +74,8 @@ export type InboundLead = {
   national_id: string | null;
   date_of_birth: string | null;
   assigned_agent_id: string | null;
+  preferred_agent_id?: string | null;
+  callback_at?: string | null;
   accepted_at: string | null;
   call_initiated_at: string | null;
   contact_verified_at: string | null;
@@ -97,4 +101,5 @@ export type LeadOutcomeAction =
   | "declined"
   | "kyc_failed"
   | "installed"
-  | "release";
+  | "release"
+  | "defer";

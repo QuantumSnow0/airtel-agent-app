@@ -283,7 +283,8 @@ export function LeadOfferModal({
 
   const preview = (offer?.preview_payload ?? {}) as LeadOfferPreview;
   const isSafaricom = preview.product === "safaricom";
-  const brandColor = isSafaricom ? SAFARICOM : AIRTEL;
+  const isReminder = Boolean(preview.isCallbackReminder);
+  const brandColor = isReminder ? "#3949AB" : isSafaricom ? SAFARICOM : AIRTEL;
   const brandLabel = isSafaricom ? "Safaricom" : "Airtel";
 
   useEffect(() => {
@@ -407,9 +408,15 @@ export function LeadOfferModal({
               <Text style={[styles.brandTag, { color: brandColor }]}>
                 {queueTotal > 1
                   ? `${brandLabel} · ${queueIndex}/${queueTotal}`
-                  : `${brandLabel} lead`}
+                  : isReminder
+                    ? `${brandLabel} · Callback reminder`
+                    : `${brandLabel} lead`}
               </Text>
-              <Text style={styles.headline}>New customer nearby</Text>
+              <Text style={styles.headline}>
+                {isReminder
+                  ? "Time to call them back"
+                  : "New customer nearby"}
+              </Text>
             </View>
 
             <Animated.View
@@ -433,7 +440,9 @@ export function LeadOfferModal({
 
           <Text style={styles.location}>{locationLine}</Text>
           <Text style={styles.unlockHint}>
-            Accept to unlock name, phone & full address
+            {isReminder
+              ? "You deferred this order — accept to continue the call & install"
+              : "Accept to unlock name, phone & full address"}
           </Text>
 
           <View style={styles.earnBanner}>

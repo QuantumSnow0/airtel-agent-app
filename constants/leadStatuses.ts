@@ -21,6 +21,7 @@ export const LEAD_STATUS_COLORS: Record<
   cancelled: { bg: "#F5F5F5", text: "#616161", label: "Cancelled" },
   needs_reassignment: { bg: "#FFEBEE", text: "#C62828", label: "Reassigning" },
   admin_queue: { bg: "#ECEFF1", text: "#455A64", label: "Admin queue" },
+  deferred: { bg: "#E8EAF6", text: "#3949AB", label: "Callback reminder" },
   lost: { bg: "#F5F5F5", text: "#616161", label: "Lost" },
   expired: { bg: "#F5F5F5", text: "#757575", label: "Expired" },
 };

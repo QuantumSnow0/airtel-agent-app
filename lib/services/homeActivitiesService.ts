@@ -39,7 +39,7 @@ export async function fetchHomeActivities(
     supabase
       .from("customer_registrations")
       .select(
-        "id, customer_name, status, created_at, installed_at, preferred_package",
+        "id, customer_name, status, created_at, updated_at, preferred_package",
       )
       .eq("agent_id", agentId)
       .eq("commission_exempt", false)
@@ -60,6 +60,19 @@ export async function fetchHomeActivities(
       .order("updated_at", { ascending: false })
       .limit(20),
   ]);
+
+  if (paymentsRes.error) {
+    console.warn("homeActivities payments:", paymentsRes.error.message);
+  }
+  if (airtelRes.error) {
+    console.warn("homeActivities airtel regs:", airtelRes.error.message);
+  }
+  if (safRes.error) {
+    console.warn("homeActivities safaricom regs:", safRes.error.message);
+  }
+  if (leadsRes.error) {
+    console.warn("homeActivities leads:", leadsRes.error.message);
+  }
 
   for (const row of paymentsRes.data ?? []) {
     const at = iso(row.created_at);
@@ -92,7 +105,7 @@ export async function fetchHomeActivities(
       });
     }
     if (row.status === "installed") {
-      const installed = iso(row.installed_at) ?? created;
+      const installed = iso(row.updated_at) ?? created;
       if (installed) {
         activities.push({
           id: `airtel-inst-${row.id}`,

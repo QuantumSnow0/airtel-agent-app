@@ -15,6 +15,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFonts } from "expo-font";
@@ -50,6 +51,23 @@ import {
   scaleHeight,
   scaleWidth,
 } from "../../lib/utils/responsive";
+
+function toDateInputValue(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function formatCallbackLabel(iso: string | null | undefined): string {
+  if (!iso) return "";
+  return new Date(iso).toLocaleDateString("en-KE", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
 
 const RELEASE_REASONS: {
   action: Extract<LeadOutcomeAction, "unreachable" | "declined" | "kyc_failed" | "release">;
@@ -105,6 +123,14 @@ export default function InboundLeadDetailScreen() {
     (typeof RELEASE_REASONS)[number]["action"] | null
   >(null);
   const [releaseNotes, setReleaseNotes] = useState("");
+  const [deferOpen, setDeferOpen] = useState(false);
+  const [callbackDate, setCallbackDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    return d;
+  });
+  const [showDatePicker, setShowDatePicker] = useState(Platform.OS === "ios");
+  const [deferNotes, setDeferNotes] = useState("");
   const scrollRef = useRef<ScrollView>(null);
 
   const [fontsLoaded] = useFonts({
@@ -181,7 +207,12 @@ export default function InboundLeadDetailScreen() {
 
   const runOutcome = async (
     action: LeadOutcomeAction,
-    extra?: { airtelSrNumber?: string; safaricomImei?: string; notes?: string },
+    extra?: {
+      airtelSrNumber?: string;
+      safaricomImei?: string;
+      notes?: string;
+      callbackAt?: string;
+    },
   ) => {
     if (!lead) return;
     setActionLoading(action);
@@ -214,6 +245,20 @@ export default function InboundLeadDetailScreen() {
       return;
     }
 
+    if (action === "defer") {
+      setDeferOpen(false);
+      setDeferNotes("");
+      const when = formatCallbackLabel(result.callbackAt ?? extra?.callbackAt);
+      Alert.alert(
+        "Reminder scheduled",
+        when
+          ? `We'll remind you to call ${lead.customer_name} on ${when}. You'll get first priority that day.`
+          : `We'll remind you to call ${lead.customer_name}. You'll get first priority that day.`,
+        [{ text: "OK", onPress: () => router.back() }],
+      );
+      return;
+    }
+
     if (result.status) {
       setLead((prev) =>
         prev
@@ -242,6 +287,20 @@ export default function InboundLeadDetailScreen() {
       );
       return;
     }
+
+    if (action === "kyc_completed") {
+      Alert.alert(
+        "Customer contacted",
+        "When the install is done, enter the proof and submit for review.",
+      );
+    }
+  };
+
+  const confirmDefer = () => {
+    void runOutcome("defer", {
+      callbackAt: toDateInputValue(callbackDate),
+      notes: deferNotes.trim() || undefined,
+    });
   };
 
   const confirmRelease = () => {
@@ -309,11 +368,16 @@ export default function InboundLeadDetailScreen() {
 
   const isTerminal =
     lead?.status === "installed" || lead?.status === "pending_install";
+  const isDeferred = lead?.status === "deferred";
   const awaitingAdminConfirm = lead?.status === "pending_install";
-  // Order already went to Airtel via MS Forms at website signup.
-  const canSubmitInstall =
-    lead?.product === "safaricom" ||
-    Boolean(callInitiated || lead?.call_initiated_at);
+  const hasCalled = Boolean(callInitiated || lead?.call_initiated_at);
+  const hasContacted = Boolean(
+    lead?.kyc_completed_at ||
+      lead?.status === "kyc_completed" ||
+      lead?.status === "kyc_in_progress",
+  );
+  // Call → mark contacted → then install proof.
+  const canSubmitInstall = !isDeferred && hasCalled && hasContacted;
 
   const scrollProofFieldIntoView = () => {
     setTimeout(() => {
@@ -368,6 +432,21 @@ export default function InboundLeadDetailScreen() {
               </Text>
             </View>
 
+            {isDeferred ? (
+              <View style={styles.reminderCard}>
+                <Text style={styles.reminderEyebrow}>Callback · Reminder</Text>
+                <Text style={styles.reminderTitle}>
+                  Call {lead.customer_name} on{" "}
+                  {formatCallbackLabel(lead.callback_at) || "the scheduled day"}
+                </Text>
+                <Text style={styles.reminderText}>
+                  You asked to wait. From 8:00 AM that day you get first priority
+                  before other agents. Keep Available for leads on so the
+                  reminder offer can reach you.
+                </Text>
+              </View>
+            ) : null}
+
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Contact</Text>
               <DetailRow label="Primary phone" value={lead.primary_phone} />
@@ -391,6 +470,12 @@ export default function InboundLeadDetailScreen() {
               />
               <DetailRow label="Visit date" value={lead.visit_date} />
               <DetailRow label="Visit time" value={lead.visit_time} />
+              {lead.callback_at ? (
+                <DetailRow
+                  label="Callback reminder"
+                  value={formatCallbackLabel(lead.callback_at)}
+                />
+              ) : null}
             </View>
 
             {lead.product === "safaricom" && (
@@ -401,49 +486,60 @@ export default function InboundLeadDetailScreen() {
               </View>
             )}
 
-            {!isTerminal && (
+            {!isTerminal && !isDeferred && (
               <View style={styles.actionsSection}>
                 <Text style={styles.sectionTitle}>Actions</Text>
 
-                {lead.product === "airtel" && (
-                  <>
-                    <TouchableOpacity
-                      style={styles.primaryBtn}
-                      onPress={handleCallCustomer}
-                      disabled={!!actionLoading}
-                    >
-                      <Text style={styles.primaryBtnText}>
-                        Call customer
-                      </Text>
-                    </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.primaryBtn}
+                  onPress={handleCallCustomer}
+                  disabled={!!actionLoading}
+                >
+                  <Text style={styles.primaryBtnText}>Call customer</Text>
+                </TouchableOpacity>
 
-                    {(callInitiated || lead.call_initiated_at) && (
-                      <View style={styles.verifiedCard}>
-                        <Text style={styles.verifiedTitle}>
-                          Call started
-                        </Text>
-                        <Text style={styles.verifiedText}>
-                          Order is already with Airtel. After the call, submit
-                          install proof when ready.
-                        </Text>
-                      </View>
-                    )}
-                  </>
-                )}
+                {hasCalled ? (
+                  <View style={styles.verifiedCard}>
+                    <Text style={styles.verifiedTitle}>Call started</Text>
+                    <Text style={styles.verifiedText}>
+                      After speaking with the customer, mark them as contacted —
+                      or release the lead if they are unreachable / declined.
+                    </Text>
+                  </View>
+                ) : null}
 
-                {lead.product === "safaricom" && (
+                {hasCalled && !hasContacted ? (
                   <TouchableOpacity
                     style={styles.secondaryBtn}
                     onPress={() => runOutcome("kyc_completed")}
                     disabled={!!actionLoading}
                   >
-                    <Text style={styles.secondaryBtnText}>Mark as contacted</Text>
+                    {actionLoading === "kyc_completed" ? (
+                      <ActivityIndicator color="#0066CC" />
+                    ) : (
+                      <Text style={styles.secondaryBtnText}>
+                        Spoke to customer
+                      </Text>
+                    )}
                   </TouchableOpacity>
-                )}
+                ) : null}
 
-                {lead.product === "airtel" && canSubmitInstall ? (
+                {hasContacted ? (
+                  <View style={styles.verifiedCard}>
+                    <Text style={styles.verifiedTitle}>
+                      ✓ Customer contacted
+                    </Text>
+                    <Text style={styles.verifiedText}>
+                      You can submit install proof when the install is done.
+                    </Text>
+                  </View>
+                ) : null}
+
+                {canSubmitInstall && lead.product === "airtel" ? (
                   <View style={styles.proofField}>
-                    <Text style={styles.proofLabel}>Airtel SR number (for install)</Text>
+                    <Text style={styles.proofLabel}>
+                      Airtel SR number (for install)
+                    </Text>
                     <TextInput
                       style={styles.proofInput}
                       value={srNumber}
@@ -456,9 +552,13 @@ export default function InboundLeadDetailScreen() {
                       blurOnSubmit
                     />
                   </View>
-                ) : lead.product === "safaricom" ? (
+                ) : null}
+
+                {canSubmitInstall && lead.product === "safaricom" ? (
                   <View style={styles.proofField}>
-                    <Text style={styles.proofLabel}>Device IMEI (for install)</Text>
+                    <Text style={styles.proofLabel}>
+                      Device IMEI (for install)
+                    </Text>
                     <TextInput
                       style={styles.proofInput}
                       value={imei}
@@ -473,7 +573,7 @@ export default function InboundLeadDetailScreen() {
                   </View>
                 ) : null}
 
-                {canSubmitInstall && (
+                {canSubmitInstall ? (
                   <TouchableOpacity
                     style={styles.installBtn}
                     onPress={handleMarkInstalled}
@@ -483,7 +583,22 @@ export default function InboundLeadDetailScreen() {
                       Submit install for review
                     </Text>
                   </TouchableOpacity>
-                )}
+                ) : null}
+
+                <TouchableOpacity
+                  style={styles.deferBtn}
+                  onPress={() => {
+                    const d = new Date();
+                    d.setDate(d.getDate() + 1);
+                    setCallbackDate(d);
+                    setDeferNotes("");
+                    setShowDatePicker(Platform.OS === "ios");
+                    setDeferOpen(true);
+                  }}
+                  disabled={!!actionLoading}
+                >
+                  <Text style={styles.deferBtnText}>Call later · set reminder</Text>
+                </TouchableOpacity>
 
                 <TouchableOpacity
                   style={styles.dangerBtn}
@@ -624,6 +739,92 @@ export default function InboundLeadDetailScreen() {
             <TouchableOpacity
               style={styles.releaseCancelBtn}
               onPress={() => setReleaseOpen(false)}
+              disabled={!!actionLoading}
+            >
+              <Text style={styles.releaseCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={deferOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setDeferOpen(false)}
+      >
+        <Pressable
+          style={styles.releaseBackdrop}
+          onPress={() => setDeferOpen(false)}
+        >
+          <Pressable
+            style={[
+              styles.releaseSheet,
+              { paddingBottom: Math.max(insets.bottom, 16) },
+            ]}
+            onPress={(e) => e.stopPropagation()}
+          >
+            <View style={styles.releaseHandle} />
+            <Text style={styles.releaseTitle}>Call later</Text>
+            <Text style={styles.releaseSubtitle}>
+              Schedule a callback reminder. We&apos;ll offer it to you from
+              8:00 AM that day — you get first priority before county and
+              priority agents.
+            </Text>
+
+            <Text style={styles.releaseNotesLabel}>Call back on</Text>
+            {Platform.OS === "android" && !showDatePicker ? (
+              <TouchableOpacity
+                style={styles.datePickBtn}
+                onPress={() => setShowDatePicker(true)}
+              >
+                <Text style={styles.datePickBtnText}>
+                  {formatCallbackLabel(callbackDate.toISOString())}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+            {(showDatePicker || Platform.OS === "ios") && (
+              <DateTimePicker
+                value={callbackDate}
+                mode="date"
+                display={Platform.OS === "ios" ? "spinner" : "default"}
+                minimumDate={new Date()}
+                onChange={(_event, selected) => {
+                  if (Platform.OS === "android") setShowDatePicker(false);
+                  if (selected) setCallbackDate(selected);
+                }}
+              />
+            )}
+
+            <Text style={styles.releaseNotesLabel}>Note (optional)</Text>
+            <TextInput
+              style={styles.releaseNotesInput}
+              value={deferNotes}
+              onChangeText={setDeferNotes}
+              placeholder="e.g. Customer said after payday"
+              placeholderTextColor="#999"
+              multiline
+              textAlignVertical="top"
+            />
+
+            <TouchableOpacity
+              style={[
+                styles.releaseConfirmBtn,
+                !!actionLoading && styles.releaseConfirmBtnDisabled,
+              ]}
+              onPress={confirmDefer}
+              disabled={!!actionLoading}
+            >
+              {actionLoading === "defer" ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <Text style={styles.releaseConfirmText}>Save reminder</Text>
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.releaseCancelBtn}
+              onPress={() => setDeferOpen(false)}
               disabled={!!actionLoading}
             >
               <Text style={styles.releaseCancelText}>Cancel</Text>
@@ -899,6 +1100,61 @@ const styles = StyleSheet.create({
     color: "#C62828",
     fontFamily: "Inter_500Medium",
     fontSize: scaleFont(14),
+  },
+  deferBtn: {
+    backgroundColor: "#EEF2FF",
+    borderRadius: 12,
+    paddingVertical: scaleHeight(14),
+    alignItems: "center",
+    marginBottom: scaleHeight(8),
+    borderWidth: 1,
+    borderColor: "#C5CAE9",
+  },
+  deferBtnText: {
+    color: "#3949AB",
+    fontFamily: "Inter_600SemiBold",
+    fontSize: scaleFont(15),
+  },
+  reminderCard: {
+    backgroundColor: "#EEF2FF",
+    borderRadius: 14,
+    padding: scaleWidth(16),
+    marginBottom: scaleHeight(14),
+    borderWidth: 1,
+    borderColor: "#C5CAE9",
+  },
+  reminderEyebrow: {
+    fontFamily: "Inter_600SemiBold",
+    fontSize: scaleFont(11),
+    color: "#3949AB",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+    marginBottom: scaleHeight(6),
+  },
+  reminderTitle: {
+    fontFamily: "Poppins_600SemiBold",
+    fontSize: scaleFont(16),
+    color: "#1A237E",
+    marginBottom: scaleHeight(6),
+  },
+  reminderText: {
+    fontFamily: "Inter_400Regular",
+    fontSize: scaleFont(13),
+    color: "#455A64",
+    lineHeight: scaleFont(19),
+  },
+  datePickBtn: {
+    borderWidth: 1,
+    borderColor: "#DDD",
+    borderRadius: 10,
+    paddingVertical: scaleHeight(12),
+    paddingHorizontal: scaleWidth(14),
+    marginBottom: scaleHeight(12),
+  },
+  datePickBtnText: {
+    fontFamily: "Inter_500Medium",
+    fontSize: scaleFont(15),
+    color: "#222",
   },
   releaseBackdrop: {
     flex: 1,

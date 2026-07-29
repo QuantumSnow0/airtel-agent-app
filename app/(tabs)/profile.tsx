@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   View,
   Text,
@@ -10,7 +10,7 @@ import {
   RefreshControl,
   Switch,
 } from "react-native";
-import { useRouter } from "expo-router";
+import { useRouter, useFocusEffect } from "expo-router";
 import { useFonts } from "expo-font";
 import {
   Poppins_600SemiBold,
@@ -164,8 +164,6 @@ export default function ProfileScreen() {
   });
 
   useEffect(() => {
-    loadProfileData();
-
     // Listen for auth state changes to handle logout immediately
     const {
       data: { subscription },
@@ -180,6 +178,12 @@ export default function ProfileScreen() {
       subscription.unsubscribe();
     };
   }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadProfileData();
+    }, []),
+  );
 
   const loadProfileData = async () => {
     setIsLoading(true);
@@ -641,7 +645,17 @@ export default function ProfileScreen() {
 
         {/* Contact Information */}
         <View style={styles.infoSection}>
-          <Text style={styles.sectionTitle}>Contact Information</Text>
+          <View style={styles.sectionTitleRow}>
+            <Text style={[styles.sectionTitle, { marginBottom: 0 }]}>
+              Contact Information
+            </Text>
+            <TouchableOpacity
+              onPress={() => router.push("/edit-profile" as any)}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Text style={styles.editLink}>Edit</Text>
+            </TouchableOpacity>
+          </View>
           <View style={styles.infoCard}>
             <View style={styles.infoRow}>
               <Text style={styles.infoLabel}>Primary Phone</Text>
@@ -660,28 +674,34 @@ export default function ProfileScreen() {
         </View>
 
         {/* Location Information */}
-        {(agentData?.town || agentData?.area) && (
-          <View style={styles.infoSection}>
-            <Text style={styles.sectionTitle}>Location</Text>
-            <View style={styles.infoCard}>
-              {agentData?.town && (
-                <>
-                  <View style={styles.infoRow}>
-                    <Text style={styles.infoLabel}>Town</Text>
-                    <Text style={styles.infoValue}>{agentData.town}</Text>
-                  </View>
-                  {agentData?.area && <View style={styles.infoDivider} />}
-                </>
-              )}
-              {agentData?.area && (
-                <View style={styles.infoRow}>
-                  <Text style={styles.infoLabel}>Area</Text>
-                  <Text style={styles.infoValue}>{agentData.area}</Text>
-                </View>
-              )}
+        <View style={styles.infoSection}>
+          <View style={styles.sectionTitleRow}>
+            <Text style={[styles.sectionTitle, { marginBottom: 0 }]}>
+              Location
+            </Text>
+            <TouchableOpacity
+              onPress={() => router.push("/edit-profile" as any)}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Text style={styles.editLink}>Edit</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.infoCard}>
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Town</Text>
+              <Text style={styles.infoValue}>
+                {agentData?.town || "Not set"}
+              </Text>
+            </View>
+            <View style={styles.infoDivider} />
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Area</Text>
+              <Text style={styles.infoValue}>
+                {agentData?.area || "Not set"}
+              </Text>
             </View>
           </View>
-        )}
+        </View>
 
         {/* Account Details */}
         <View style={styles.infoSection}>
@@ -980,6 +1000,17 @@ const styles = StyleSheet.create({
     color: "#333333",
     marginBottom: 12,
     letterSpacing: 0.3,
+  },
+  sectionTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 12,
+  },
+  editLink: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+    color: "#0066CC",
   },
   statsGrid: {
     flexDirection: "row",

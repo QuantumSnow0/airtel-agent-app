@@ -184,10 +184,12 @@ export default function RegisterCustomerScreen() {
         ]);
         return;
       }
-      if (!lead.contact_verified_at) {
-        Alert.alert("Verify customer first", "Call and verify the customer from the lead screen.", [
-          { text: "OK", onPress: () => router.back() },
-        ]);
+      if (!lead.call_initiated_at && !lead.contact_verified_at) {
+        Alert.alert(
+          "Call the customer first",
+          "Open the lead, call the customer, then come back if you still need this form.",
+          [{ text: "OK", onPress: () => router.back() }],
+        );
         return;
       }
 

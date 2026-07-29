@@ -25,6 +25,7 @@ import { supabase } from "../../lib/supabase";
 import {
   fetchActiveOffers,
   fetchAssignedLeads,
+  fetchDeferredReminders,
 } from "../../lib/services/leadDispatchService";
 import type { InboundLead, LeadOffer, LeadOfferPreview } from "../../lib/dispatch/types";
 import { LeadOfferModal } from "../../components/LeadOfferModal";
@@ -55,18 +56,23 @@ function OfferCard({
   const p = offer.preview_payload as LeadOfferPreview;
   const isSaf = p.product === "safaricom";
   const brand = isSaf ? "#00A651" : "#E60012";
+  const isReminder = Boolean(p.isCallbackReminder);
 
   return (
     <TouchableOpacity style={styles.offerCard} onPress={onPress} activeOpacity={0.88}>
-      <View style={[styles.offerBrandStrip, { backgroundColor: brand }]} />
+      <View style={[styles.offerBrandStrip, { backgroundColor: isReminder ? "#3949AB" : brand }]} />
       <View style={styles.offerBody}>
         <View style={styles.offerTop}>
-          <View style={[styles.offerBadge, { backgroundColor: brand }]}>
-            <Text style={styles.offerBadgeText}>{isSaf ? "S" : "A"}</Text>
+          <View style={[styles.offerBadge, { backgroundColor: isReminder ? "#3949AB" : brand }]}>
+            <Text style={styles.offerBadgeText}>{isReminder ? "R" : isSaf ? "S" : "A"}</Text>
           </View>
           <View style={styles.offerInfo}>
             <Text style={styles.offerTitle}>
-              {isSaf ? "Safaricom" : "Airtel"} lead
+              {isReminder
+                ? "Callback reminder"
+                : isSaf
+                  ? "Safaricom lead"
+                  : "Airtel lead"}
             </Text>
             <Text style={styles.offerLocation} numberOfLines={2}>
               {[p.installationTown, p.roughArea].filter(Boolean).join(" · ") ||
@@ -76,7 +82,9 @@ function OfferCard({
           <MaterialIcons name="chevron-right" size={scaleWidth(24)} color="#0066CC" />
         </View>
         <Text style={styles.offerPackage} numberOfLines={1}>
-          {p.packageLabel ?? "Package TBC"}
+          {isReminder
+            ? `Call back · ${p.packageLabel ?? "Package TBC"}`
+            : (p.packageLabel ?? "Package TBC")}
         </Text>
         <View style={styles.offerFooter}>
           <MaterialIcons name="timer" size={scaleWidth(14)} color="#E65100" />
@@ -93,6 +101,7 @@ export default function LeadsScreen() {
   const { openOffer } = useLocalSearchParams<{ openOffer?: string }>();
   const [offers, setOffers] = useState<LeadOffer[]>([]);
   const [leads, setLeads] = useState<InboundLead[]>([]);
+  const [reminders, setReminders] = useState<InboundLead[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [modalOffer, setModalOffer] = useState<LeadOffer | null>(null);
@@ -131,12 +140,14 @@ export default function LeadsScreen() {
       router.replace("/login" as any);
       return;
     }
-    const [offersRes, leadsRes] = await Promise.all([
+    const [offersRes, leadsRes, remindersRes] = await Promise.all([
       fetchActiveOffers(user.id),
       fetchAssignedLeads(user.id),
+      fetchDeferredReminders(user.id),
     ]);
     setOffers(offersRes.offers);
     setLeads(leadsRes.leads);
+    setReminders(remindersRes.leads);
 
     if (openOffer) {
       const match = offersRes.offers.find((o) => o.id === openOffer);
@@ -249,6 +260,59 @@ export default function LeadsScreen() {
                   onPress={() => openOfferModal(offer)}
                 />
               ))
+            )}
+
+            <View style={[styles.sectionHead, { marginTop: scaleHeight(24) }]}>
+              <MaterialIcons name="event" size={scaleWidth(20)} color="#3949AB" />
+              <Text style={styles.sectionTitle}>Scheduled reminders</Text>
+            </View>
+            {reminders.length === 0 ? (
+              <View style={styles.emptyCard}>
+                <MaterialIcons name="event-available" size={scaleWidth(36)} color="#CCCCCC" />
+                <Text style={styles.emptyTitle}>No reminders yet</Text>
+                <Text style={styles.emptyText}>
+                  When a customer wants install later, use Call later on a lead.
+                </Text>
+              </View>
+            ) : (
+              reminders.map((lead) => {
+                const st =
+                  LEAD_STATUS_COLORS[lead.status] ?? LEAD_STATUS_COLORS.deferred;
+                const when = lead.callback_at
+                  ? new Date(lead.callback_at).toLocaleDateString("en-KE", {
+                      day: "numeric",
+                      month: "short",
+                    })
+                  : "Soon";
+                return (
+                  <TouchableOpacity
+                    key={lead.id}
+                    style={styles.leadCard}
+                    onPress={() => router.push(`/lead/${lead.id}` as any)}
+                    activeOpacity={0.88}
+                  >
+                    <View
+                      style={[styles.leadBrandDot, { backgroundColor: "#3949AB" }]}
+                    />
+                    <View style={styles.leadCardBody}>
+                      <View style={styles.leadCardTop}>
+                        <Text style={styles.leadName}>{lead.customer_name}</Text>
+                        <View style={[styles.chip, { backgroundColor: st.bg }]}>
+                          <Text style={[styles.chipText, { color: st.text }]}>
+                            {when}
+                          </Text>
+                        </View>
+                      </View>
+                      <Text style={styles.leadMeta} numberOfLines={1}>
+                        Callback reminder ·{" "}
+                        {[lead.installation_town, lead.plan_label]
+                          .filter(Boolean)
+                          .join(" · ") || "Lead"}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })
             )}
 
             <View style={[styles.sectionHead, { marginTop: scaleHeight(24) }]}>

@@ -138,6 +138,21 @@ export async function fetchAssignedLeads(
   return { leads: (data ?? []) as InboundLead[] };
 }
 
+/** Parked callback reminders owned by this agent (not yet woken). */
+export async function fetchDeferredReminders(
+  agentId: string,
+): Promise<{ leads: InboundLead[]; error?: string }> {
+  const { data, error } = await supabase
+    .from("inbound_leads")
+    .select("*")
+    .eq("preferred_agent_id", agentId)
+    .eq("status", "deferred")
+    .order("callback_at", { ascending: true });
+
+  if (error) return { leads: [], error: error.message };
+  return { leads: (data ?? []) as InboundLead[] };
+}
+
 /** Single offer by id (must belong to agent). */
 export async function fetchOfferById(
   agentId: string,

@@ -11,12 +11,15 @@ export type LeadOutcomeParams = {
   airtelSrNumber?: string;
   safaricomImei?: string;
   notes?: string;
+  /** ISO date (YYYY-MM-DD) or datetime for action=defer */
+  callbackAt?: string;
 };
 
 export type LeadOutcomeResult = {
   success: boolean;
   status?: string;
   releaseReason?: string;
+  callbackAt?: string;
   commissionKes?: number;
   dispatch?: {
     outcome?: string;
@@ -42,6 +45,7 @@ export async function submitLeadOutcome(
       airtelSrNumber: params.airtelSrNumber,
       safaricomImei: params.safaricomImei,
       notes: params.notes,
+      callbackAt: params.callbackAt,
     },
   });
 
@@ -78,6 +82,7 @@ export async function submitLeadOutcome(
     success: true,
     status: data?.status as string | undefined,
     releaseReason: data?.releaseReason as string | undefined,
+    callbackAt: data?.callbackAt as string | undefined,
     commissionKes:
       data?.commissionKes != null ? Number(data.commissionKes) : undefined,
     dispatch: data?.dispatch as LeadOutcomeResult["dispatch"],
