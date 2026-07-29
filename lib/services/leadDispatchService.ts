@@ -10,6 +10,7 @@ export type DispatchConfig = {
   offer_timeout_minutes: number;
   sla_hours: number;
   max_open_leads_per_agent: number;
+  max_open_leads_enabled: boolean;
 };
 
 function mapOffer(row: Record<string, unknown>): LeadOffer {
@@ -30,11 +31,14 @@ export async function fetchDispatchConfig(): Promise<DispatchConfig> {
     offer_timeout_minutes: 15,
     sla_hours: 24,
     max_open_leads_per_agent: 3,
+    max_open_leads_enabled: true,
   };
 
   const { data } = await supabase
     .from("dispatch_config")
-    .select("offer_timeout_minutes, sla_hours, max_open_leads_per_agent")
+    .select(
+      "offer_timeout_minutes, sla_hours, max_open_leads_per_agent, max_open_leads_enabled",
+    )
     .limit(1)
     .maybeSingle();
 
@@ -44,6 +48,8 @@ export async function fetchDispatchConfig(): Promise<DispatchConfig> {
     sla_hours: data.sla_hours ?? defaults.sla_hours,
     max_open_leads_per_agent:
       data.max_open_leads_per_agent ?? defaults.max_open_leads_per_agent,
+    max_open_leads_enabled:
+      data.max_open_leads_enabled ?? defaults.max_open_leads_enabled,
   };
 }
 

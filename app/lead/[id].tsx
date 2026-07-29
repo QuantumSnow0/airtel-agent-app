@@ -42,10 +42,6 @@ import {
   submitLeadOutcome,
 } from "../../lib/services/leadOutcomeService";
 import {
-  sendLeadContactOtp,
-  verifyLeadContactOtp,
-} from "../../lib/services/leadContactOtpService";
-import {
   LEAD_INSTALL_COMMISSION_KES,
   getLeadInstallCommissionKes,
 } from "../../lib/commissions/leadInstallCommission";
@@ -104,10 +100,6 @@ export default function InboundLeadDetailScreen() {
   const [srNumber, setSrNumber] = useState("");
   const [imei, setImei] = useState("");
   const [callInitiated, setCallInitiated] = useState(false);
-  const [otpSent, setOtpSent] = useState(false);
-  const [otpCode, setOtpCode] = useState("");
-  const [otpMaskedPhone, setOtpMaskedPhone] = useState("");
-  const [otpLoading, setOtpLoading] = useState<"send" | "verify" | null>(null);
   const [releaseOpen, setReleaseOpen] = useState(false);
   const [releaseReason, setReleaseReason] = useState<
     (typeof RELEASE_REASONS)[number]["action"] | null
@@ -274,7 +266,7 @@ export default function InboundLeadDetailScreen() {
 
   const handleCallCustomer = async () => {
     if (!lead) return;
-    // Mark call intent first so OTP unlocks even if the dialer check fails
+    // Mark call intent even if the dialer check fails
     // (Android 11+ canOpenURL is unreliable for tel: without package queries).
     setCallInitiated(true);
     void runOutcome("call_started");
@@ -288,80 +280,6 @@ export default function InboundLeadDetailScreen() {
         `Open your phone app and dial ${dialPhone}`,
       );
     }
-  };
-
-  const handleSendOtp = async () => {
-    if (!lead) return;
-    if (!callInitiated) {
-    Alert.alert(
-      "Call the customer first",
-      "Use Call customer, speak to them, then send the confirmation code.",
-    );
-      return;
-    }
-
-    setOtpLoading("send");
-    const result = await sendLeadContactOtp(lead.id);
-    setOtpLoading(null);
-    if (!result.success) {
-      Alert.alert("Code not sent", result.error);
-      return;
-    }
-    if (result.alreadyVerified) {
-      await loadLead();
-      return;
-    }
-
-    setOtpSent(true);
-    setOtpMaskedPhone(result.maskedPhone ?? "");
-    setOtpCode("");
-    Alert.alert(
-      "Confirmation code sent",
-      `Ask the customer for the 6-digit code sent to ${
-        result.maskedPhone || "their phone"
-      }.`,
-    );
-  };
-
-  const handleVerifyOtp = async () => {
-    if (!lead) return;
-    if (!/^\d{6}$/.test(otpCode)) {
-      Alert.alert(
-        "Enter the code",
-        "Enter the 6-digit contact confirmation code from the customer.",
-      );
-      return;
-    }
-
-    setOtpLoading("verify");
-    const result = await verifyLeadContactOtp(lead.id, otpCode);
-    setOtpLoading(null);
-    if (!result.success) {
-      Alert.alert("Verification failed", result.error);
-      return;
-    }
-
-    setOtpCode("");
-    setOtpSent(false);
-    await loadLead();
-    Alert.alert(
-      "Contact confirmed",
-      "You can now review and submit the prefilled registration.",
-    );
-  };
-
-  const handleOpenLeadRegistration = () => {
-    if (!lead?.contact_verified_at) {
-      Alert.alert(
-        "Confirm contact first",
-        "Call the customer and enter their contact confirmation code.",
-      );
-      return;
-    }
-    router.push({
-      pathname: "/register-customer",
-      params: { leadId: lead.id },
-    } as any);
   };
 
   const handleMarkInstalled = () => {
@@ -392,11 +310,10 @@ export default function InboundLeadDetailScreen() {
   const isTerminal =
     lead?.status === "installed" || lead?.status === "pending_install";
   const awaitingAdminConfirm = lead?.status === "pending_install";
-  const airtelRegistrationComplete =
-    lead?.product === "airtel" &&
-    (lead.status === "kyc_completed" ||
-      lead.status === "pending_install" ||
-      lead.status === "installed");
+  // Order already went to Airtel via MS Forms at website signup.
+  const canSubmitInstall =
+    lead?.product === "safaricom" ||
+    Boolean(callInitiated || lead?.call_initiated_at);
 
   const scrollProofFieldIntoView = () => {
     setTimeout(() => {
@@ -493,113 +410,21 @@ export default function InboundLeadDetailScreen() {
                     <TouchableOpacity
                       style={styles.primaryBtn}
                       onPress={handleCallCustomer}
-                      disabled={!!actionLoading || !!otpLoading}
+                      disabled={!!actionLoading}
                     >
                       <Text style={styles.primaryBtnText}>
                         Call customer
                       </Text>
                     </TouchableOpacity>
 
-                    {lead.contact_verified_at ? (
+                    {(callInitiated || lead.call_initiated_at) && (
                       <View style={styles.verifiedCard}>
                         <Text style={styles.verifiedTitle}>
-                          ✓ Customer contact confirmed
+                          Call started
                         </Text>
                         <Text style={styles.verifiedText}>
-                          Verified by SMS code{" "}
-                          {new Date(lead.contact_verified_at).toLocaleString()}.
-                        </Text>
-                      </View>
-                    ) : (
-                      <View style={styles.otpCard}>
-                        <Text style={styles.otpTitle}>
-                          Confirm customer contact
-                        </Text>
-                        <Text style={styles.otpHelp}>
-                          While speaking to the customer, send a confirmation
-                          code and enter the 6 digits they give you.
-                        </Text>
-                        <TouchableOpacity
-                          style={[
-                            styles.secondaryBtn,
-                            (!callInitiated || !!otpLoading) && styles.disabledBtn,
-                          ]}
-                          onPress={handleSendOtp}
-                          disabled={!callInitiated || !!otpLoading}
-                        >
-                          {otpLoading === "send" ? (
-                            <ActivityIndicator color="#0066CC" />
-                          ) : (
-                            <Text style={styles.secondaryBtnText}>
-                              {otpSent
-                                ? "Resend confirmation code"
-                                : "Send confirmation code"}
-                            </Text>
-                          )}
-                        </TouchableOpacity>
-
-                        {otpSent ? (
-                          <>
-                            <Text style={styles.otpSentText}>
-                              Confirmation code sent to{" "}
-                              {otpMaskedPhone || "customer"}
-                            </Text>
-                            <TextInput
-                              style={styles.otpInput}
-                              value={otpCode}
-                              onChangeText={(value) =>
-                                setOtpCode(value.replace(/\D/g, "").slice(0, 6))
-                              }
-                              placeholder="6-digit confirmation code"
-                              placeholderTextColor="#999"
-                              keyboardType="number-pad"
-                              maxLength={6}
-                              textAlign="center"
-                            />
-                            <TouchableOpacity
-                              style={[
-                                styles.verifyBtn,
-                                (otpCode.length !== 6 || !!otpLoading) &&
-                                  styles.disabledBtn,
-                              ]}
-                              onPress={handleVerifyOtp}
-                              disabled={otpCode.length !== 6 || !!otpLoading}
-                            >
-                              {otpLoading === "verify" ? (
-                                <ActivityIndicator color="#FFFFFF" />
-                              ) : (
-                                <Text style={styles.verifyBtnText}>
-                                  Confirm code
-                                </Text>
-                              )}
-                            </TouchableOpacity>
-                          </>
-                        ) : null}
-                      </View>
-                    )}
-
-                    {!airtelRegistrationComplete ? (
-                      <TouchableOpacity
-                        style={[
-                          styles.registrationBtn,
-                          !lead.contact_verified_at && styles.disabledBtn,
-                        ]}
-                        onPress={handleOpenLeadRegistration}
-                        disabled={!lead.contact_verified_at || !!actionLoading}
-                      >
-                        <Text style={styles.registrationBtnText}>
-                          {lead.registration_id
-                            ? "Resubmit registration"
-                            : "Review and submit registration"}
-                        </Text>
-                      </TouchableOpacity>
-                    ) : (
-                      <View style={styles.registrationDoneCard}>
-                        <Text style={styles.registrationDoneTitle}>
-                          ✓ Registration submitted
-                        </Text>
-                        <Text style={styles.verifiedText}>
-                          Customer registration completed successfully.
+                          Order is already with Airtel. After the call, submit
+                          install proof when ready.
                         </Text>
                       </View>
                     )}
@@ -616,7 +441,7 @@ export default function InboundLeadDetailScreen() {
                   </TouchableOpacity>
                 )}
 
-                {lead.product === "airtel" && airtelRegistrationComplete ? (
+                {lead.product === "airtel" && canSubmitInstall ? (
                   <View style={styles.proofField}>
                     <Text style={styles.proofLabel}>Airtel SR number (for install)</Text>
                     <TextInput
@@ -648,7 +473,7 @@ export default function InboundLeadDetailScreen() {
                   </View>
                 ) : null}
 
-                {(lead.product === "safaricom" || airtelRegistrationComplete) && (
+                {canSubmitInstall && (
                   <TouchableOpacity
                     style={styles.installBtn}
                     onPress={handleMarkInstalled}

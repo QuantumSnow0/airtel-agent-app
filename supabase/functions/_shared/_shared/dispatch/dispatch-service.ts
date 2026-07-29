@@ -21,6 +21,7 @@ type DispatchConfig = {
   dispatch_enabled: boolean;
   offer_timeout_minutes: number;
   max_open_leads_per_agent: number;
+  max_open_leads_enabled: boolean;
   online_presence_minutes: number;
 };
 
@@ -30,7 +31,7 @@ export async function loadDispatchConfig(
   const { data } = await service
     .from("dispatch_config")
     .select(
-      "dispatch_enabled, offer_timeout_minutes, max_open_leads_per_agent, online_presence_minutes",
+      "dispatch_enabled, offer_timeout_minutes, max_open_leads_per_agent, max_open_leads_enabled, online_presence_minutes",
     )
     .limit(1)
     .maybeSingle();
@@ -41,6 +42,8 @@ export async function loadDispatchConfig(
       data?.offer_timeout_minutes ?? DISPATCH_DEFAULTS.offerTimeoutMinutes,
     max_open_leads_per_agent:
       data?.max_open_leads_per_agent ?? DISPATCH_DEFAULTS.maxOpenLeadsPerAgent,
+    max_open_leads_enabled:
+      data?.max_open_leads_enabled ?? DISPATCH_DEFAULTS.maxOpenLeadsEnabled,
     online_presence_minutes:
       data?.online_presence_minutes ?? DISPATCH_DEFAULTS.onlinePresenceMinutes,
   };
@@ -214,7 +217,7 @@ export async function dispatchLead(
     locationRefs,
     lead.product,
     openCounts,
-    config.max_open_leads_per_agent,
+    config.max_open_leads_enabled ? config.max_open_leads_per_agent : null,
     config.online_presence_minutes,
   ).filter((a) => !excluded.has(a.agent_id));
 
