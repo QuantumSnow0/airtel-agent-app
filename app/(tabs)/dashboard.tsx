@@ -195,6 +195,9 @@ export default function DashboardScreen() {
   const [toastTitle, setToastTitle] = useState<string | undefined>(undefined);
   const [toastType, setToastType] = useState<"info" | "success" | "error">("info");
   const [notificationPromptVisible, setNotificationPromptVisible] = useState(false);
+  const [notificationPromptVariant, setNotificationPromptVariant] = useState<
+    "optional" | "required_for_leads"
+  >("optional");
   const [ratingPromptVisible, setRatingPromptVisible] = useState(false);
   const [isOffline, setIsOffline] = useState(false);
   const [leadsAvailable, setLeadsAvailable] = useState(false);
@@ -203,6 +206,7 @@ export default function DashboardScreen() {
   const [homeRefreshKey, setHomeRefreshKey] = useState(0);
   const [activeOfferCount, setActiveOfferCount] = useState(0);
   const wasOfflineRef = useRef(false);
+  const pendingEnableLeadsRef = useRef(false);
 
   const evaluateDashboardPrompts = async (agentStatus?: string | null) => {
     if (agentStatus !== "approved") {
@@ -211,28 +215,67 @@ export default function DashboardScreen() {
       return;
     }
 
+    // Don't interrupt a mandatory leads notification prompt.
+    if (pendingEnableLeadsRef.current) return;
+
     const permission = await getNotificationPermissionState();
     const showNotification =
       permission !== "granted" && (await shouldShowNotificationPrompt());
-    setNotificationPromptVisible(showNotification);
-
     if (showNotification) {
+      setNotificationPromptVariant("optional");
+      setNotificationPromptVisible(true);
       setRatingPromptVisible(false);
       return;
     }
 
+    setNotificationPromptVisible(false);
     const showRating = await shouldShowAppRatingPrompt();
     setRatingPromptVisible(showRating);
   };
 
   const handleNotificationPromptDismiss = async () => {
-    await dismissNotificationPrompt();
+    if (notificationPromptVariant === "optional") {
+      await dismissNotificationPrompt();
+    }
+    pendingEnableLeadsRef.current = false;
     setNotificationPromptVisible(false);
+    setNotificationPromptVariant("optional");
     void evaluateDashboardPrompts(agentData?.status);
+  };
+
+  const applyLeadsAvailability = async (next: boolean) => {
+    const agentId = agentData?.id ?? user?.id;
+    if (!agentId) return;
+    setTogglingLeads(true);
+    const result = await setDispatchAvailability(agentId, next);
+    setTogglingLeads(false);
+    if (!result.success) {
+      Alert.alert("Could not update", result.error ?? "Please try again.");
+      return;
+    }
+    setLeadsAvailable(next);
+    if (Platform.OS !== "web") {
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    }
+    setToastTitle(next ? "Receiving leads" : "Leads paused");
+    setToastMessage(
+      next
+        ? "New website offers can reach you now."
+        : "You won't get new offers until you turn this back on.",
+    );
+    setToastType("success");
+    setToastVisible(true);
   };
 
   const handleNotificationEnabled = () => {
     setNotificationPromptVisible(false);
+    const wasPendingLeads = pendingEnableLeadsRef.current;
+    pendingEnableLeadsRef.current = false;
+    setNotificationPromptVariant("optional");
+    if (wasPendingLeads) {
+      void applyLeadsAvailability(true);
+      return;
+    }
     void evaluateDashboardPrompts(agentData?.status);
   };
 
@@ -266,13 +309,29 @@ export default function DashboardScreen() {
         void (async () => {
           const agentId = agentData?.id ?? user?.id;
           if (!agentId) return;
-          const [avail, offersRes] = await Promise.all([
+          const [avail, offersRes, permission] = await Promise.all([
             fetchDispatchAvailability(agentId),
             fetchActiveOffers(agentId),
+            getNotificationPermissionState(),
           ]);
-          setLeadsAvailable(avail.isAvailable);
           setCanReceiveLeads(avail.canReceiveLeads);
           setActiveOfferCount(offersRes.offers.length);
+
+          // Receive leads requires push permission — auto-pause if revoked.
+          if (avail.isAvailable && permission !== "granted") {
+            setLeadsAvailable(false);
+            const paused = await setDispatchAvailability(agentId, false);
+            if (paused.success) {
+              setToastTitle("Leads paused");
+              setToastMessage(
+                "Turn on WAM notifications to receive leads again.",
+              );
+              setToastType("info");
+              setToastVisible(true);
+            }
+          } else {
+            setLeadsAvailable(avail.isAvailable);
+          }
         })();
       } else {
         setCanReceiveLeads(false);
@@ -293,25 +352,18 @@ export default function DashboardScreen() {
       return;
     }
     const next = !leadsAvailable;
-    setTogglingLeads(true);
-    const result = await setDispatchAvailability(agentId, next);
-    setTogglingLeads(false);
-    if (!result.success) {
-      Alert.alert("Could not update", result.error ?? "Please try again.");
-      return;
+
+    if (next) {
+      const permission = await getNotificationPermissionState();
+      if (permission !== "granted") {
+        pendingEnableLeadsRef.current = true;
+        setNotificationPromptVariant("required_for_leads");
+        setNotificationPromptVisible(true);
+        return;
+      }
     }
-    setLeadsAvailable(next);
-    if (Platform.OS !== "web") {
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    }
-    setToastTitle(next ? "Receiving leads" : "Leads paused");
-    setToastMessage(
-      next
-        ? "New website offers can reach you now."
-        : "You won't get new offers until you turn this back on.",
-    );
-    setToastType("success");
-    setToastVisible(true);
+
+    await applyLeadsAvailability(next);
   };
 
   const [fontsLoaded] = useFonts({
@@ -1376,6 +1428,7 @@ export default function DashboardScreen() {
       <NotificationEnablePrompt
         visible={notificationPromptVisible}
         agentId={user?.id}
+        variant={notificationPromptVariant}
         onDismiss={handleNotificationPromptDismiss}
         onEnabled={handleNotificationEnabled}
       />

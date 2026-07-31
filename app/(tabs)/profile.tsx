@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   View,
   Text,
@@ -146,6 +146,9 @@ export default function ProfileScreen() {
   const [balance, setBalance] = useState(0);
   const [notificationsGranted, setNotificationsGranted] = useState(true);
   const [notificationPromptVisible, setNotificationPromptVisible] = useState(false);
+  const [notificationPromptVariant, setNotificationPromptVariant] = useState<
+    "optional" | "required_for_leads"
+  >("optional");
   const [ratingPromptVisible, setRatingPromptVisible] = useState(false);
   /** Combined Airtel + Safaricom installed commission (matches dashboard wallet). */
   const [totalEarningsKsh, setTotalEarningsKsh] = useState(0);
@@ -154,6 +157,7 @@ export default function ProfileScreen() {
   const [leadsAvailable, setLeadsAvailable] = useState(false);
   const [canReceiveLeads, setCanReceiveLeads] = useState(false);
   const [togglingLeads, setTogglingLeads] = useState(false);
+  const pendingEnableLeadsRef = useRef(false);
 
   const [fontsLoaded] = useFonts({
     Poppins_600SemiBold,
@@ -258,8 +262,16 @@ export default function ProfileScreen() {
       }
 
       const dispatchAvail = await fetchDispatchAvailability(currentUser.id);
-      setLeadsAvailable(dispatchAvail.isAvailable);
+      const permission = await getNotificationPermissionState();
       setCanReceiveLeads(dispatchAvail.canReceiveLeads);
+      setNotificationsGranted(permission === "granted");
+
+      if (dispatchAvail.isAvailable && permission !== "granted") {
+        setLeadsAvailable(false);
+        await setDispatchAvailability(currentUser.id, false);
+      } else {
+        setLeadsAvailable(dispatchAvail.isAvailable);
+      }
 
       // Load registration statistics (Airtel + Safaricom)
       const [
@@ -520,10 +532,31 @@ export default function ProfileScreen() {
       <NotificationEnablePrompt
         visible={notificationPromptVisible}
         agentId={user?.id}
-        onDismiss={() => setNotificationPromptVisible(false)}
-        onEnabled={() => {
+        variant={notificationPromptVariant}
+        onDismiss={() => {
+          pendingEnableLeadsRef.current = false;
+          setNotificationPromptVisible(false);
+          setNotificationPromptVariant("optional");
+        }}
+        onEnabled={async () => {
           setNotificationPromptVisible(false);
           setNotificationsGranted(true);
+          const wasPending = pendingEnableLeadsRef.current;
+          pendingEnableLeadsRef.current = false;
+          setNotificationPromptVariant("optional");
+          if (wasPending && user?.id) {
+            setTogglingLeads(true);
+            const result = await setDispatchAvailability(user.id, true);
+            setTogglingLeads(false);
+            if (!result.success) {
+              Alert.alert(
+                "Could not update",
+                result.error ?? "Please try again.",
+              );
+              return;
+            }
+            setLeadsAvailable(true);
+          }
         }}
       />
       <AppRatingPrompt
@@ -732,6 +765,16 @@ export default function ProfileScreen() {
                           "Connect to the internet to change lead availability.",
                         );
                         return;
+                      }
+                      if (value) {
+                        const permission =
+                          await getNotificationPermissionState();
+                        if (permission !== "granted") {
+                          pendingEnableLeadsRef.current = true;
+                          setNotificationPromptVariant("required_for_leads");
+                          setNotificationPromptVisible(true);
+                          return;
+                        }
                       }
                       setTogglingLeads(true);
                       const result = await setDispatchAvailability(

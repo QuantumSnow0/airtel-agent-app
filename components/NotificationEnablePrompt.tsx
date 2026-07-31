@@ -25,6 +25,8 @@ import {
 type NotificationEnablePromptProps = {
   visible: boolean;
   agentId?: string;
+  /** optional = soft nudge; required_for_leads = must enable before Receive leads can turn on */
+  variant?: "optional" | "required_for_leads";
   onDismiss: () => void;
   onEnabled: () => void;
 };
@@ -32,6 +34,7 @@ type NotificationEnablePromptProps = {
 export function NotificationEnablePrompt({
   visible,
   agentId,
+  variant = "optional",
   onDismiss,
   onEnabled,
 }: NotificationEnablePromptProps) {
@@ -39,6 +42,8 @@ export function NotificationEnablePrompt({
     useState<NotificationPermissionState>("undetermined");
   const [isWorking, setIsWorking] = useState(false);
   const [awaitingSettings, setAwaitingSettings] = useState(false);
+
+  const isRequired = variant === "required_for_leads";
 
   const refreshPermission = async () => {
     const state = await getNotificationPermissionState();
@@ -110,25 +115,38 @@ export function NotificationEnablePrompt({
       <Pressable style={styles.backdrop} onPress={onDismiss}>
         <View style={styles.card} onStartShouldSetResponder={() => true}>
           <Text style={styles.icon}>🔔</Text>
-          <Text style={styles.title}>Stay in the loop</Text>
+          <Text style={styles.title}>
+            {isRequired ? "Notifications required" : "Stay in the loop"}
+          </Text>
           <Text style={styles.body}>
-            Notifications are optional, but we recommend turning them on so you
-            never miss payments, registration updates, or new earnings even
-            when the app is closed.
+            {isRequired
+              ? "To turn on Receive leads, WAM app notifications must be allowed. Without them you won't get lead offers when the app is closed — Receive leads will stay off."
+              : "Notifications are optional, but we recommend turning them on so you never miss payments, registration updates, or new earnings even when the app is closed."}
           </Text>
 
           <View style={styles.benefits}>
-            <Text style={styles.benefitItem}>💸 Payment receipts</Text>
-            <Text style={styles.benefitItem}>✅ Install & status updates</Text>
-            <Text style={styles.benefitItem}>💰 Commission alerts</Text>
+            {isRequired ? (
+              <>
+                <Text style={styles.benefitItem}>📥 Inbound lead offers</Text>
+                <Text style={styles.benefitItem}>⏱️ Time-sensitive alerts</Text>
+                <Text style={styles.benefitItem}>💸 Payment & status updates</Text>
+              </>
+            ) : (
+              <>
+                <Text style={styles.benefitItem}>💸 Payment receipts</Text>
+                <Text style={styles.benefitItem}>✅ Install & status updates</Text>
+                <Text style={styles.benefitItem}>💰 Commission alerts</Text>
+              </>
+            )}
           </View>
 
           {alreadyGranted ? (
             <View style={styles.grantedBox}>
               <Text style={styles.grantedTitle}>Already allowed</Text>
               <Text style={styles.grantedText}>
-                This device has already granted notification permission. You
-                should receive payment, status, and payout alerts.
+                {isRequired
+                  ? "Notifications are on. You can turn on Receive leads now."
+                  : "This device has already granted notification permission. You should receive payment, status, and payout alerts."}
               </Text>
             </View>
           ) : null}
@@ -169,7 +187,9 @@ export function NotificationEnablePrompt({
             disabled={isWorking}
             activeOpacity={0.7}
           >
-            <Text style={styles.secondaryBtnText}>Maybe later</Text>
+            <Text style={styles.secondaryBtnText}>
+              {isRequired ? "Keep Receive leads off" : "Maybe later"}
+            </Text>
           </TouchableOpacity>
         </View>
       </Pressable>

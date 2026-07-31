@@ -178,8 +178,13 @@ export async function handleNotificationOpen(
     return;
   }
 
-  // Announcements always use the custom sheet (scrollable body + optional Open link).
+  // Announcements: leads-enabled activation → home (toggle), otherwise detail sheet.
   if (type === "SYSTEM_ANNOUNCEMENT") {
+    const kind = String(metadata.kind ?? "").toLowerCase();
+    if (kind === "leads_enabled" || metadata.deepLink === "dashboard") {
+      router.push("/dashboard" as any);
+      return;
+    }
     showNotificationDetailSheet(data, appNotification, actionUrl);
     return;
   }
