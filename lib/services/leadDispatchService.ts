@@ -63,7 +63,7 @@ export async function fetchDispatchAvailability(
     .eq("id", agentId)
     .maybeSingle();
 
-  const scope = agent?.lead_dispatch_scope ?? "both";
+  const scope = agent?.lead_dispatch_scope ?? "none";
   const canReceiveLeads =
     agent?.status === "approved" && scope !== "none";
 
@@ -84,6 +84,29 @@ export async function setDispatchAvailability(
   agentId: string,
   isAvailable: boolean,
 ): Promise<{ success: boolean; error?: string }> {
+  if (isAvailable) {
+    const { data: agent } = await supabase
+      .from("agents")
+      .select("status, lead_dispatch_scope")
+      .eq("id", agentId)
+      .maybeSingle();
+
+    if (!agent || agent.status !== "approved") {
+      return {
+        success: false,
+        error: "Your account must be approved by admin before you can receive leads.",
+      };
+    }
+    const scope = agent.lead_dispatch_scope ?? "none";
+    if (scope === "none") {
+      return {
+        success: false,
+        error:
+          "Admin has not enabled inbound leads for your account yet. Ask them to turn on lead dispatch.",
+      };
+    }
+  }
+
   const now = new Date().toISOString();
   const { error } = await supabase.from("agent_dispatch_settings").upsert(
     {

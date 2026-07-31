@@ -22,8 +22,8 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../lib/supabase";
 import { NotificationCard } from "../components/NotificationCard";
-import { promptLeadOfferModal } from "../lib/dispatch/leadOfferBridge";
 import { mapDbNotification } from "../lib/notifications/presentation";
+import { handleNotificationOpen } from "../lib/notifications/openNotificationAction";
 import {
     getResponsivePadding,
     scaleFont,
@@ -232,37 +232,40 @@ export default function NotificationsScreen() {
     }
   };
 
-  // Helper function to automatically mark unread notifications as read
-  const markNotificationsAsRead = async (items: AppNotification[]) => {
-    const unreadNotifications = items.filter((n) => !n.isRead);
-    if (unreadNotifications.length > 0) {
-      // Small delay to ensure notifications are actually displayed
-      setTimeout(async () => {
-        const unreadIds = unreadNotifications.map((n) => n.id);
-        try {
-          const { error } = await supabase
-            .from("notifications")
-            .update({
-              is_read: true,
-              read_at: new Date().toISOString(),
-            })
-            .in("id", unreadIds);
+  // Mark every unread row for this agent (not just the 50 on screen)
+  const markNotificationsAsRead = async (_items: AppNotification[]) => {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    const user = session?.user;
+    if (!user) return;
 
-          if (!error) {
-            // Update local state to reflect read status
-            setNotifications((prev) =>
-              prev.map((notif) =>
-                unreadIds.includes(notif.id)
-                  ? { ...notif, isRead: true }
-                  : notif
-              )
-            );
-          }
-        } catch (error) {
-          console.error("Error auto-marking notifications as read:", error);
+    setTimeout(async () => {
+      try {
+        const { markAllNotificationsRead } = await import(
+          "../lib/notifications/unreadCount"
+        );
+        const result = await markAllNotificationsRead(user.id, {
+          excludeSpotlightKinds: true,
+        });
+        if (result.ok) {
+          setNotifications((prev) =>
+            prev.map((notif) => {
+              if (notif.type !== "SYSTEM_ANNOUNCEMENT") {
+                return { ...notif, isRead: true };
+              }
+              const kind = String(notif.metadata?.kind ?? "").toLowerCase();
+              if (kind === "meeting" || kind === "urgent") return notif;
+              return { ...notif, isRead: true };
+            }),
+          );
+        } else {
+          console.error("Error auto-marking notifications as read:", result.error);
         }
-      }, 1000); // 1 second delay
-    }
+      } catch (error) {
+        console.error("Error auto-marking notifications as read:", error);
+      }
+    }, 1000);
   };
 
   const markAllAsRead = async () => {
@@ -276,20 +279,13 @@ export default function NotificationsScreen() {
     // Optimistically update UI
     setNotifications((prev) => prev.map((notif) => ({ ...notif, isRead: true })));
 
-    // Update all unread notifications in database
     try {
-      const { error } = await supabase
-        .from("notifications")
-        .update({
-          is_read: true,
-          read_at: new Date().toISOString(),
-        })
-        .eq("agent_id", user.id)
-        .eq("is_read", false);
-
-      if (error) {
-        console.error("Error marking all notifications as read:", error);
-        // Reload notifications to revert
+      const { markAllNotificationsRead } = await import(
+        "../lib/notifications/unreadCount"
+      );
+      const result = await markAllNotificationsRead(user.id);
+      if (!result.ok) {
+        console.error("Error marking all notifications as read:", result.error);
         loadNotifications();
       }
     } catch (error) {
@@ -297,51 +293,30 @@ export default function NotificationsScreen() {
     }
   };
 
-  const handleNotificationPress = (notification: AppNotification) => {
-    switch (notification.type) {
-      case "REGISTRATION_STATUS_CHANGE":
-        if (notification.relatedId) {
-          const carrier =
-            notification.metadata?.carrier === "safaricom"
-              ? "safaricom"
-              : "airtel";
-          router.push(
-            `/registration/${notification.relatedId}?source=${carrier}` as any
+  const handleNotificationPress = async (notification: AppNotification) => {
+    // Mark this one read when opened
+    if (!notification.isRead) {
+      void supabase
+        .from("notifications")
+        .update({
+          is_read: true,
+          read_at: new Date().toISOString(),
+        })
+        .eq("id", notification.id)
+        .then(() => {
+          setNotifications((prev) =>
+            prev.map((n) =>
+              n.id === notification.id ? { ...n, isRead: true } : n,
+            ),
           );
-        } else {
-          router.push("/registrations" as any);
-        }
-        break;
-      case "EARNINGS_UPDATE":
-        router.push("/earnings-history" as any);
-        break;
-      case "ACCOUNT_STATUS_CHANGE":
-        // Navigate to profile/account settings
-        router.push("/dashboard" as any);
-        break;
-      case "SYNC_FAILURE":
-        // Navigate to registrations page with filter for failed syncs
-        router.push(`/registrations` as any);
-        break;
-      case "SYSTEM_ANNOUNCEMENT":
-        // No navigation needed
-        break;
-      case "PAYOUT_RECEIVED":
-        router.push("/earnings-history" as any);
-        break;
-      case "LEAD_OFFER": {
-        const offerId = notification.metadata?.offerId as string | undefined;
-        promptLeadOfferModal(offerId ? String(offerId) : null);
-        break;
-      }
-      case "LEAD_OVERDUE":
-        if (notification.relatedId) {
-          router.push(`/lead/${notification.relatedId}` as any);
-        } else {
-          router.push("/leads" as any);
-        }
-        break;
+        });
     }
+
+    // Prefer the custom detail sheet so long announcements are readable;
+    // Open link stays available inside the sheet when metadata has a URL.
+    await handleNotificationOpen(router, notification, {
+      preferExternalLink: false,
+    });
   };
 
   const unreadCount = notifications.filter((n) => !n.isRead).length;

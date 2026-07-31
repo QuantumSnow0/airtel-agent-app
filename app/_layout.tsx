@@ -19,6 +19,7 @@ import {
 } from "../lib/services/pushNotificationService";
 import { supabase } from "../lib/supabase";
 import { LeadDispatchManager } from "../components/LeadDispatchManager";
+import { NotificationDetailHost } from "../components/NotificationDetailModal";
 import { HomeDashboardSkeleton } from "../components/HomeDashboardSkeleton";
 import {
   extractOfferIdFromPushData,
@@ -30,6 +31,10 @@ import {
   declineLeadOffer,
 } from "../lib/services/leadOfferActionService";
 import { dismissLeadOfferOsNotification } from "../lib/notifications/presentLeadOfferOsNotification";
+import {
+  handleNotificationOpen,
+  resolveNotificationActionUrl,
+} from "../lib/notifications/openNotificationAction";
 import * as Notifications from "expo-notifications";
 
 // Move ref outside component to persist across remounts (React Strict Mode)
@@ -555,67 +560,48 @@ export default function RootLayout() {
       return;
     }
 
+    const metadata =
+      data.metadata && typeof data.metadata === "object"
+        ? (data.metadata as Record<string, unknown>)
+        : {};
+    const content = notification.request?.content;
+    const pushTitle =
+      (typeof data.title === "string" && data.title) ||
+      (typeof content?.title === "string" ? content.title : null);
+    const pushMessage =
+      (typeof data.message === "string" && data.message) ||
+      (typeof content?.body === "string" ? content.body : null);
+    const actionUrl =
+      (typeof data.actionUrl === "string" && data.actionUrl) ||
+      resolveNotificationActionUrl(metadata, pushMessage);
+
+    // Announcements → custom sheet; other types with links open immediately.
+    if (actionUrl && data.type !== "LEAD_OFFER") {
+      await handleNotificationOpen(router, {
+        type: typeof data.type === "string" ? data.type : undefined,
+        title: pushTitle,
+        relatedId:
+          typeof data.relatedId === "string" ? data.relatedId : null,
+        actionUrl,
+        metadata,
+        message: pushMessage,
+        carrier: typeof data.carrier === "string" ? data.carrier : null,
+      });
+      return;
+    }
+
     // Navigate based on notification type
     if (data?.type) {
-      switch (data.type) {
-        case "REGISTRATION_STATUS_CHANGE":
-          if (data.relatedId) {
-            const carrier =
-              data.carrier === "safaricom" || data.metadata?.carrier === "safaricom"
-                ? "safaricom"
-                : "airtel";
-            router.push(
-              `/registration/${data.relatedId}?source=${carrier}` as any
-            );
-          } else if (currentRoute !== "registrations") {
-            router.push("/registrations" as any);
-          }
-          break;
-        case "EARNINGS_UPDATE":
-          router.push("/earnings-history" as any);
-          break;
-        case "ACCOUNT_STATUS_CHANGE":
-          if (currentRoute !== "dashboard") {
-            router.push("/dashboard" as any);
-          }
-          break;
-        case "SYNC_FAILURE":
-          if (currentRoute !== "registrations") {
-            router.push("/registrations" as any);
-          }
-          break;
-        case "SYSTEM_ANNOUNCEMENT":
-          if (currentRoute !== "notifications") {
-            router.push("/notifications" as any);
-          }
-          break;
-        case "PAYOUT_RECEIVED":
-          router.push("/earnings-history" as any);
-          break;
-        case "LEAD_OFFER": {
-          const offerId =
-            data.metadata?.offerId ?? data.offerId;
-          if (offerId) {
-            promptLeadOfferModal(String(offerId));
-          } else {
-            promptLeadOfferModal(null);
-          }
-          break;
-        }
-        case "LEAD_OVERDUE":
-          if (data.relatedId) {
-            router.push(`/lead/${data.relatedId}` as any);
-          } else {
-            router.push("/leads" as any);
-          }
-          break;
-        default:
-          // Unknown type - go to dashboard instead of notifications to avoid confusion
-          console.log("⚠️ Unknown notification type, navigating to dashboard");
-          if (currentRoute !== "dashboard") {
-            router.push("/dashboard" as any);
-          }
-      }
+      await handleNotificationOpen(router, {
+        type: String(data.type),
+        title: pushTitle,
+        relatedId:
+          typeof data.relatedId === "string" ? data.relatedId : null,
+        actionUrl,
+        metadata,
+        message: pushMessage,
+        carrier: typeof data.carrier === "string" ? data.carrier : null,
+      });
     } else {
       // No type specified - go to dashboard instead of notifications
       console.log("⚠️ No notification type, navigating to dashboard");
@@ -731,6 +717,7 @@ export default function RootLayout() {
         }}
       />
       <LeadDispatchManager />
+      <NotificationDetailHost />
     </>
   );
 }

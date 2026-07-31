@@ -6,7 +6,8 @@ export type NotificationType =
   | "SYSTEM_ANNOUNCEMENT"
   | "PAYOUT_RECEIVED"
   | "LEAD_OFFER"
-  | "LEAD_OVERDUE";
+  | "LEAD_OVERDUE"
+  | "LEAD_INSTALLED";
 
 export type AppNotification = {
   id: string;

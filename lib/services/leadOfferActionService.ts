@@ -186,6 +186,10 @@ export async function acceptLeadOffer(
 
 
 
+  void import("../notifications/unreadCount").then(({ markLeadOfferNotificationsRead }) =>
+    markLeadOfferNotificationsRead(offerId),
+  );
+
   return { success: true, lead: data?.lead as InboundLead | undefined };
 
 }
@@ -219,6 +223,10 @@ export async function declineLeadOffer(
   }
 
 
+
+  void import("../notifications/unreadCount").then(({ markLeadOfferNotificationsRead }) =>
+    markLeadOfferNotificationsRead(offerId),
+  );
 
   return { success: true };
 

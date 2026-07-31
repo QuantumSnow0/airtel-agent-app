@@ -70,6 +70,12 @@ const TYPE_VISUALS: Record<NotificationType, NotificationVisual> = {
     softBg: "#F3E5F5",
     label: "Announcement",
   },
+  LEAD_INSTALLED: {
+    icon: "check-circle",
+    accent: "#2E7D32",
+    softBg: "#E8F5E9",
+    label: "Install confirmed",
+  },
 };
 
 const REGISTRATION_STATUS_VISUALS: Record<string, Partial<NotificationVisual>> = {
@@ -130,6 +136,12 @@ export function formatNotificationDisplay(
   };
 }
 
+export function getNotificationVisualForType(
+  type: string,
+): NotificationVisual {
+  return TYPE_VISUALS[type as NotificationType] ?? DEFAULT_VISUAL;
+}
+
 export function getNotificationVisual(
   notification: AppNotification,
 ): NotificationVisual {
@@ -147,7 +159,7 @@ export function getNotificationVisual(
     };
   }
 
-  return TYPE_VISUALS[notification.type] ?? DEFAULT_VISUAL;
+  return getNotificationVisualForType(notification.type);
 }
 
 export function formatTimeAgo(dateString: string): string {
@@ -173,8 +185,22 @@ export function mapDbNotification(record: {
   is_read: boolean;
   created_at: string;
   related_id?: string | null;
-  metadata?: Record<string, unknown> | null;
+  metadata?: Record<string, unknown> | string | null;
 }): AppNotification {
+  let metadata: Record<string, unknown> = {};
+  if (typeof record.metadata === "string") {
+    try {
+      const parsed = JSON.parse(record.metadata) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        metadata = parsed as Record<string, unknown>;
+      }
+    } catch {
+      metadata = {};
+    }
+  } else if (record.metadata && typeof record.metadata === "object") {
+    metadata = record.metadata;
+  }
+
   return {
     id: record.id,
     type: record.type as NotificationType,
@@ -183,6 +209,6 @@ export function mapDbNotification(record: {
     isRead: record.is_read,
     createdAt: record.created_at,
     relatedId: record.related_id ?? undefined,
-    metadata: record.metadata ?? {},
+    metadata,
   };
 }

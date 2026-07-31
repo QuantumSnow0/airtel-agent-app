@@ -6,6 +6,7 @@ import {
   formatTimeAgo,
   getNotificationVisual,
 } from "../lib/notifications/presentation";
+import { resolveNotificationActionUrl } from "../lib/notifications/openNotificationAction";
 import {
   scaleFont,
   scaleHeight,
@@ -24,6 +25,10 @@ export function NotificationCard({
   const visual = getNotificationVisual(notification);
   const display = formatNotificationDisplay(notification);
   const isUnread = !notification.isRead;
+  const actionUrl = resolveNotificationActionUrl(
+    notification.metadata,
+    notification.message,
+  );
 
   return (
     <TouchableOpacity
@@ -69,19 +74,33 @@ export function NotificationCard({
 
         <View style={styles.footer}>
           <Text style={styles.time}>{formatTimeAgo(notification.createdAt)}</Text>
-          <View style={[styles.badge, { backgroundColor: visual.softBg }]}>
-            {visual.urgent ? (
+          {actionUrl ? (
+            <View style={[styles.badge, { backgroundColor: "#E8F1FF" }]}>
               <MaterialIcons
-                name="priority-high"
+                name="open-in-new"
                 size={scaleWidth(12)}
-                color={visual.accent}
+                color="#0066CC"
                 style={styles.badgeIcon}
               />
-            ) : null}
-            <Text style={[styles.badgeText, { color: visual.accent }]}>
-              {visual.label}
-            </Text>
-          </View>
+              <Text style={[styles.badgeText, { color: "#0066CC" }]}>
+                Open link
+              </Text>
+            </View>
+          ) : (
+            <View style={[styles.badge, { backgroundColor: visual.softBg }]}>
+              {visual.urgent ? (
+                <MaterialIcons
+                  name="priority-high"
+                  size={scaleWidth(12)}
+                  color={visual.accent}
+                  style={styles.badgeIcon}
+                />
+              ) : null}
+              <Text style={[styles.badgeText, { color: visual.accent }]}>
+                {visual.label}
+              </Text>
+            </View>
+          )}
         </View>
       </View>
     </TouchableOpacity>

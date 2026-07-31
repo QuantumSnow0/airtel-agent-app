@@ -756,6 +756,36 @@ export default function ProfileScreen() {
                 <View style={styles.infoDivider} />
               </>
             ) : null}
+            {agentData?.status === "approved" && !canReceiveLeads ? (
+              <>
+                <View style={styles.infoRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.infoLabel}>Inbound leads</Text>
+                    <Text style={styles.leadsToggleHint}>
+                      Admin has not enabled website leads for you yet. You can
+                      use the app, but offers stay off until they turn on lead
+                      dispatch.
+                    </Text>
+                  </View>
+                </View>
+                <View style={styles.infoDivider} />
+              </>
+            ) : null}
+            {agentData?.status === "pending" ? (
+              <>
+                <View style={styles.infoRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.infoLabel}>Inbound leads</Text>
+                    <Text style={styles.leadsToggleHint}>
+                      Your account is pending admin approval. You cannot receive
+                      website leads until you are approved and enabled for
+                      dispatch.
+                    </Text>
+                  </View>
+                </View>
+                <View style={styles.infoDivider} />
+              </>
+            ) : null}
             <View style={styles.infoRow}>
               <Text style={styles.infoLabel}>Member Since</Text>
               <Text style={styles.infoValue}>

@@ -100,7 +100,7 @@ async function loadEligibleAgents(
     return {
       agent_id: a.id,
       town: a.town,
-      lead_dispatch_scope: a.lead_dispatch_scope ?? "both",
+      lead_dispatch_scope: a.lead_dispatch_scope ?? "none",
       is_available: s?.is_available ?? false,
       county: s?.county ?? null,
       last_seen_at: (s?.last_seen_at as string | null) ?? null,

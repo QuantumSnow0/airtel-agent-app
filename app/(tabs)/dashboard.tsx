@@ -32,6 +32,7 @@ import { HomePromoCarousel } from "../../components/HomePromoCarousel";
 import { OnboardCustomerSection } from "../../components/OnboardCustomerSection";
 import { HomeActivities } from "../../components/HomeActivities";
 import { HomeLeadOfferBanner } from "../../components/HomeLeadOfferBanner";
+import { HomeActionSpotlight } from "../../components/HomeActionSpotlight";
 import { HomeDashboardSkeleton } from "../../components/HomeDashboardSkeleton";
 import { AppRatingPrompt } from "../../components/AppRatingPrompt";
 import { NotificationEnablePrompt } from "../../components/NotificationEnablePrompt";
@@ -139,27 +140,15 @@ export default function DashboardScreen() {
   const [greeting, setGreeting] = useState("Good morning,");
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   
-  // Load unread notification count
+  // Load unread notification count (excludes lead-offer rows — those use Leads tab)
   const loadUnreadNotificationCount = async (agentId: string) => {
     try {
-      const { count, error } = await supabase
-        .from("notifications")
-        .select("*", { count: "exact", head: true })
-        .eq("agent_id", agentId)
-        .eq("is_read", false);
-
-      if (error) {
-        console.error("Error loading unread notification count:", error);
-        return;
-      }
-
-      if (count !== null) {
-        console.log("📊 Unread notifications count:", count);
-        setUnreadNotifications(count);
-      } else {
-        console.log("📊 No unread notifications");
-        setUnreadNotifications(0);
-      }
+      const { fetchUnreadNotificationBellCount } = await import(
+        "../../lib/notifications/unreadCount"
+      );
+      const count = await fetchUnreadNotificationBellCount(agentId);
+      console.log("📊 Unread notifications count:", count);
+      setUnreadNotifications(count);
     } catch (error) {
       console.error("Error loading unread notification count:", error);
       setUnreadNotifications(0);
@@ -271,6 +260,7 @@ export default function DashboardScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      setHomeRefreshKey((k) => k + 1);
       if (agentData?.status === "approved") {
         void evaluateDashboardPrompts(agentData.status);
         void (async () => {
@@ -519,6 +509,7 @@ export default function DashboardScreen() {
           try {
             console.log("🔄 Reloading notification count after change...");
             await loadUnreadNotificationCount(user.id);
+            setHomeRefreshKey((k) => k + 1);
             console.log("✅ Notification count reloaded");
           } catch (error) {
             console.error("❌ Error reloading notification count:", error);
@@ -1629,6 +1620,17 @@ export default function DashboardScreen() {
               </View>
             )}
           </View>
+
+          {/* Meeting / urgent spotlight from admin notifications */}
+          <HomeActionSpotlight
+            agentId={user?.id ?? agentData?.id}
+            refreshKey={homeRefreshKey}
+            onResolved={() => {
+              const id = user?.id ?? agentData?.id;
+              if (id) void loadUnreadNotificationCount(id);
+              setHomeRefreshKey((k) => k + 1);
+            }}
+          />
 
         {isApproved ? (
           <>
