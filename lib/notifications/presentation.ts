@@ -76,6 +76,12 @@ const TYPE_VISUALS: Record<NotificationType, NotificationVisual> = {
     softBg: "#E8F5E9",
     label: "Install confirmed",
   },
+  LEAD_SUBMITTED_STATUS: {
+    icon: "campaign",
+    accent: "#1565C0",
+    softBg: "#E3F2FD",
+    label: "Your lead update",
+  },
 };
 
 const REGISTRATION_STATUS_VISUALS: Record<string, Partial<NotificationVisual>> = {

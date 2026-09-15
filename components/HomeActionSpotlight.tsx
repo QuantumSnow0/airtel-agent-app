@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  Image,
   Platform,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+import { Image } from "expo-image";
 import { MaterialIcons } from "@expo/vector-icons";
 import Svg, {
   Circle,
@@ -258,7 +258,9 @@ export function HomeActionSpotlight({
             <Image
               source={{ uri: item.logoUrl }}
               style={styles.logoImage}
-              resizeMode="contain"
+              contentFit="contain"
+              cachePolicy="memory-disk"
+              transition={0}
             />
           ) : showTeamsFallback ? (
             <TeamsWatermark />

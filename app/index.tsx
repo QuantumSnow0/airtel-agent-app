@@ -1,40 +1,16 @@
-import { Text, View, StyleSheet, TouchableOpacity, ActivityIndicator, ScrollView } from "react-native";
+import { Text, View, StyleSheet, TouchableOpacity, ScrollView } from "react-native";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
-import { useFonts } from "expo-font";
 import {
   scaleWidth,
   scaleHeight,
   scaleFont,
   getResponsivePadding,
 } from "../lib/utils/responsive";
-import { useEffect, useState } from "react";
 import { AFFILIATION_DISCLAIMER } from "../constants/legal";
-import {
-  Poppins_600SemiBold,
-  Poppins_700Bold,
-} from "@expo-google-fonts/poppins";
-import { Inter_400Regular, Inter_500Medium } from "@expo-google-fonts/inter";
 
 export default function WelcomeScreen() {
   const router = useRouter();
-
-  const [fontsLoaded] = useFonts({
-    Poppins_600SemiBold,
-    Poppins_700Bold,
-    Inter_400Regular,
-    Inter_500Medium,
-  });
-
-  // Show loading only while loading fonts
-  // Auth check is handled by _layout.tsx to avoid double loading screens
-  if (!fontsLoaded) {
-    return (
-      <View style={styles.container}>
-        <ActivityIndicator size="large" color="#0066CC" />
-      </View>
-    );
-  }
 
   const handleGetStarted = () => {
     // Navigate to registration form
@@ -58,7 +34,9 @@ export default function WelcomeScreen() {
             source={require("../assets/images/welcome-image.jpg")}
             style={styles.welcomeImage}
             contentFit="contain"
-            transition={200}
+            cachePolicy="memory-disk"
+            priority="high"
+            transition={0}
           />
         </View>
 

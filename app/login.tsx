@@ -16,14 +16,9 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useFonts } from "expo-font";
-import {
-  Poppins_600SemiBold,
-  Poppins_700Bold,
-} from "@expo-google-fonts/poppins";
-import { Inter_400Regular, Inter_500Medium } from "@expo-google-fonts/inter";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../lib/supabase";
+import { getPostAuthHref } from "../lib/google-places/workingPlaceGate";
 
 const loginSchema = z.object({
   email: z.string().email("Please enter a valid email address"),
@@ -41,14 +36,8 @@ export default function LoginScreen() {
   const [error, setError] = useState<string | null>(null);
   const [isResendingOtp, setIsResendingOtp] = useState(false);
   const [unverifiedEmail, setUnverifiedEmail] = useState<string | null>(null);
+  const [checkingSession, setCheckingSession] = useState(true);
   const scrollViewRef = useRef<ScrollView>(null);
-
-  const [fontsLoaded] = useFonts({
-    Poppins_600SemiBold,
-    Poppins_700Bold,
-    Inter_400Regular,
-    Inter_500Medium,
-  });
 
   const {
     control,
@@ -67,7 +56,7 @@ export default function LoginScreen() {
 
   // Set email and error from params when component mounts
   useEffect(() => {
-    if (fontsLoaded && params.email) {
+    if (params.email) {
       const email = typeof params.email === "string" ? params.email : "";
       if (email) {
         setValue("email", email);
@@ -79,11 +68,38 @@ export default function LoginScreen() {
         setError(errorMessage);
       }
     }
-  }, [fontsLoaded, params.email, params.error, setValue]);
+  }, [params.email, params.error, setValue]);
 
-  if (!fontsLoaded) {
-    return null;
-  }
+  useEffect(() => {
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (cancelled || !session?.user) return;
+
+        if (!session.user.email_confirmed_at) {
+          router.replace("/verify-email" as any);
+          return;
+        }
+
+        const href = await getPostAuthHref(session.user.id);
+        if (!cancelled) {
+          router.replace(href as any);
+        }
+      } finally {
+        if (!cancelled) {
+          setCheckingSession(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
 
   // Removed auto-scroll handlers - KeyboardAvoidingView will handle layout adjustments
 
@@ -141,14 +157,13 @@ export default function LoginScreen() {
 
       if (agentError) {
         console.error("Error checking agent status:", agentError);
-        // If agent record doesn't exist, treat as pending - go to dashboard (will show pending status)
         router.replace("/dashboard" as any);
         setIsLoading(false);
         return;
       }
 
-      // Always navigate to dashboard (dashboard handles pending/approved status display)
-      router.replace("/dashboard" as any);
+      const href = await getPostAuthHref(authData.user.id);
+      router.replace(href as any);
     } catch (err: any) {
       console.error("Login error:", err);
       setError(err.message || "Failed to sign in. Please try again.");
@@ -239,6 +254,14 @@ export default function LoginScreen() {
       setIsResendingOtp(false);
     }
   };
+
+  if (checkingSession) {
+    return (
+      <View style={[styles.container, styles.sessionCheck]}>
+        <ActivityIndicator size="large" color="#0066CC" />
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -431,6 +454,10 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#FFFFFF",
+  },
+  sessionCheck: {
+    alignItems: "center",
+    justifyContent: "center",
   },
   keyboardView: {
     flex: 1,

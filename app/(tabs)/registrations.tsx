@@ -13,16 +13,6 @@ import {
   FlatList,
 } from "react-native";
 import { useRouter } from "expo-router";
-import { useFonts } from "expo-font";
-import {
-  Poppins_600SemiBold,
-  Poppins_700Bold,
-} from "@expo-google-fonts/poppins";
-import {
-  Inter_400Regular,
-  Inter_500Medium,
-  Inter_600SemiBold,
-} from "@expo-google-fonts/inter";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../../lib/supabase";
 import {
@@ -90,14 +80,6 @@ export default function RegistrationsScreen() {
   const [toastVisible, setToastVisible] = useState(false);
   const [toastMessage, setToastMessage] = useState("");
   const [toastType, setToastType] = useState<"info" | "success" | "error">("info");
-
-  const [fontsLoaded] = useFonts({
-    Poppins_600SemiBold,
-    Poppins_700Bold,
-    Inter_400Regular,
-    Inter_500Medium,
-    Inter_600SemiBold,
-  });
 
   useEffect(() => {
     loadRegistrations();
@@ -572,10 +554,6 @@ export default function RegistrationsScreen() {
         return "#999999";
     }
   };
-
-  if (!fontsLoaded) {
-    return null;
-  }
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>

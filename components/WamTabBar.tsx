@@ -1,11 +1,6 @@
 import { MaterialIcons } from "@expo/vector-icons";
 import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
 import * as Haptics from "expo-haptics";
-import { useFonts } from "expo-font";
-import {
-  Inter_600SemiBold,
-  Inter_700Bold,
-} from "@expo-google-fonts/inter";
 import { useCallback, useEffect, useState } from "react";
 import {
   Platform,
@@ -45,10 +40,6 @@ export function getWamTabBarOffset(insetsBottom: number): number {
 export function WamTabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
   const [offerCount, setOfferCount] = useState(0);
-  const [fontsLoaded] = useFonts({
-    Inter_600SemiBold,
-    Inter_700Bold,
-  });
 
   const bottomInset = Math.max(
     insets.bottom,
@@ -169,7 +160,7 @@ export function WamTabBar({ state, navigation }: BottomTabBarProps) {
               <Text
                 style={[
                   styles.label,
-                  fontsLoaded && styles.labelFont,
+                  styles.labelFont,
                   focused && styles.labelActive,
                 ]}
                 numberOfLines={1}

@@ -29,16 +29,29 @@ export type OfferStatus =
   | "expired"
   | "superseded";
 
+/** Safe customer pin from preview_payload (no name/phone). */
+export type OfferGooglePlace = {
+  placeId?: string;
+  name?: string;
+  formattedAddress?: string;
+  lat?: number;
+  lng?: number;
+};
+
 /** Blind preview from lead_offers.preview_payload */
 export type LeadOfferPreview = {
   product?: LeadProduct;
+  /** inbound_leads.source — used to hide install fees on agent_own */
+  source?: string | null;
   county?: string | null;
   installationTown?: string | null;
   roughArea?: string | null;
   packageLabel?: string | null;
+  preferredPackage?: string | null;
   submittedAgoMinutes?: number;
   distanceKm?: number | null;
   isCallbackReminder?: boolean;
+  googlePlace?: OfferGooglePlace | null;
 };
 
 export type LeadOffer = {
@@ -74,6 +87,7 @@ export type InboundLead = {
   national_id: string | null;
   date_of_birth: string | null;
   assigned_agent_id: string | null;
+  submitted_by_agent_id?: string | null;
   preferred_agent_id?: string | null;
   callback_at?: string | null;
   accepted_at: string | null;

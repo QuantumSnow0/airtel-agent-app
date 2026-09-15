@@ -19,6 +19,7 @@ export type LeadOutcomeResult = {
   success: boolean;
   status?: string;
   releaseReason?: string;
+  reassigned?: boolean;
   callbackAt?: string;
   commissionKes?: number;
   dispatch?: {
@@ -82,6 +83,7 @@ export async function submitLeadOutcome(
     success: true,
     status: data?.status as string | undefined,
     releaseReason: data?.releaseReason as string | undefined,
+    reassigned: data?.reassigned === true,
     callbackAt: data?.callbackAt as string | undefined,
     commissionKes:
       data?.commissionKes != null ? Number(data.commissionKes) : undefined,

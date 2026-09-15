@@ -1,13 +1,3 @@
-import {
-    Inter_400Regular,
-    Inter_500Medium,
-    Inter_600SemiBold,
-} from "@expo-google-fonts/inter";
-import {
-    Poppins_600SemiBold,
-    Poppins_700Bold,
-} from "@expo-google-fonts/poppins";
-import { useFonts } from "expo-font";
 import { useRouter, useSegments } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -46,14 +36,6 @@ export default function NotificationsScreen() {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const hasLoadedRef = useRef(false);
   const subscriptionRef = useRef<any>(null);
-
-  const [fontsLoaded] = useFonts({
-    Poppins_600SemiBold,
-    Poppins_700Bold,
-    Inter_400Regular,
-    Inter_500Medium,
-    Inter_600SemiBold,
-  });
 
   // Load real notifications from database
   useEffect(() => {
@@ -320,10 +302,6 @@ export default function NotificationsScreen() {
   };
 
   const unreadCount = notifications.filter((n) => !n.isRead).length;
-
-  if (!fontsLoaded) {
-    return null;
-  }
 
   const createStyles = () => {
     const responsivePadding = getResponsivePadding();

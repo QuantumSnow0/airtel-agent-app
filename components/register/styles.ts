@@ -47,6 +47,13 @@ export const registerStyles = StyleSheet.create({
     marginBottom: 8,
     letterSpacing: 0.2,
   },
+  helperText: {
+    fontSize: 13,
+    fontFamily: "Inter_400Regular",
+    color: "#666666",
+    marginBottom: 8,
+    lineHeight: 18,
+  },
   input: {
     borderWidth: 1,
     borderColor: "#E0E0E0",

@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState, type AppStateStatus } from "react-native";
-import { useRouter } from "expo-router";
+import { useRouter, usePathname } from "expo-router";
 import { supabase } from "../lib/supabase";
 import {
   fetchActiveOffers,
@@ -63,6 +63,7 @@ export function LeadDispatchManager({
   onPendingOfferHandled,
 }: LeadDispatchManagerProps) {
   const router = useRouter();
+  const pathname = usePathname();
   const [modalOffer, setModalOffer] = useState<LeadOffer | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
   const [queueTotal, setQueueTotal] = useState(0);
@@ -365,6 +366,10 @@ export function LeadDispatchManager({
       onPendingOfferHandled?.();
     });
   }, [pendingOfferId, onPendingOfferHandled, openOfferById]);
+
+  if (pathname?.includes("set-working-location")) {
+    return null;
+  }
 
   return (
     <LeadOfferModal

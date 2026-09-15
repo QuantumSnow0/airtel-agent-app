@@ -1,10 +1,48 @@
 import { Dimensions, PixelRatio } from "react-native";
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
-
 // Base dimensions (iPhone 12/13/14 - 390x844)
 const BASE_WIDTH = 390;
 const BASE_HEIGHT = 844;
+
+function readLayoutSize(): { width: number; height: number } {
+  const window = Dimensions.get("window");
+  const screen = Dimensions.get("screen");
+  const pr = PixelRatio.get() || 1;
+
+  let width = window.width || screen.width;
+  let height = window.height || screen.height;
+
+  // Expo Go / New Architecture on some Androids reports raw pixels
+  // instead of dp. That makes scaleWidth/scaleFont blow up ~2.5–3x.
+  const widthDp = width / pr;
+  const heightDp = height / pr;
+  if (pr > 1.5 && width >= 700 && widthDp >= 300 && widthDp <= 520) {
+    width = widthDp;
+    height = heightDp;
+  }
+
+  return { width, height };
+}
+
+let { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = readLayoutSize();
+
+Dimensions.addEventListener("change", () => {
+  const next = readLayoutSize();
+  SCREEN_WIDTH = next.width;
+  SCREEN_HEIGHT = next.height;
+});
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function widthScale(): number {
+  return clamp(SCREEN_WIDTH / BASE_WIDTH, 0.85, 1.12);
+}
+
+function heightScale(): number {
+  return clamp(SCREEN_HEIGHT / BASE_HEIGHT, 0.85, 1.12);
+}
 
 /**
  * Scale a size based on screen width
@@ -12,8 +50,7 @@ const BASE_HEIGHT = 844;
  * @returns Scaled size
  */
 export const scaleWidth = (size: number): number => {
-  const scale = SCREEN_WIDTH / BASE_WIDTH;
-  return Math.round(size * scale);
+  return Math.round(size * widthScale());
 };
 
 /**
@@ -22,8 +59,7 @@ export const scaleWidth = (size: number): number => {
  * @returns Scaled size
  */
 export const scaleHeight = (size: number): number => {
-  const scale = SCREEN_HEIGHT / BASE_HEIGHT;
-  return Math.round(size * scale);
+  return Math.round(size * heightScale());
 };
 
 /**
@@ -32,8 +68,7 @@ export const scaleHeight = (size: number): number => {
  * @returns Scaled font size
  */
 export const scaleFont = (size: number): number => {
-  const scale = SCREEN_WIDTH / BASE_WIDTH;
-  const newSize = size * scale;
+  const newSize = size * widthScale();
   return Math.round(PixelRatio.roundToNearestPixel(newSize));
 };
 
@@ -97,8 +132,3 @@ export const isSmallScreen = (): boolean => SCREEN_WIDTH < 360;
  * Check if device is large screen
  */
 export const isLargeScreen = (): boolean => SCREEN_WIDTH > 480;
-
-
-
-
-

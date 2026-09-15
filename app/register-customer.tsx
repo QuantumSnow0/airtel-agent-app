@@ -17,12 +17,6 @@ import {
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useFonts } from "expo-font";
-import {
-  Poppins_600SemiBold,
-  Poppins_700Bold,
-} from "@expo-google-fonts/poppins";
-import { Inter_400Regular, Inter_500Medium } from "@expo-google-fonts/inter";
 import {
   useSafeAreaInsets,
   SafeAreaView,
@@ -60,6 +54,15 @@ import {
 } from "../lib/services/commissionRatesService";
 import { fetchInboundLeadById } from "../lib/dispatch/leadDetailService";
 import { completeLeadRegistration } from "../lib/services/leadRegistrationService";
+import { fetchDispatchConfig } from "../lib/services/leadDispatchService";
+import { resolveLeadInstallDisplayKes } from "../lib/commissions/leadInstallCommission";
+import {
+  fetchRegistrationMode,
+  type RegistrationMode,
+} from "../lib/services/registrationModeService";
+import AirtelConnectRegisterScreen from "../components/customer-register/AirtelConnectRegisterScreen";
+import { AirtelConnectPathChooser } from "../components/customer-register/AirtelConnectPathChooser";
+import type { AirtelConnectEntryPath } from "../lib/validation/airtelConnectRegistrationSchemas";
 
 function formatLeadDate(value: string | null): string {
   if (!value) return "";
@@ -93,10 +96,19 @@ export default function RegisterCustomerScreen() {
   const router = useRouter();
   const { leadId } = useLocalSearchParams<{ leadId?: string }>();
   const isLeadRegistration = Boolean(leadId);
+  const [registrationMode, setRegistrationMode] = useState<
+    RegistrationMode | "loading"
+  >("loading");
+  const [connectEntryPath, setConnectEntryPath] =
+    useState<AirtelConnectEntryPath | null>(null);
+  const [legacyProceed, setLegacyProceed] = useState(false);
   const insets = useSafeAreaInsets();
   const [currentStep, setCurrentStep] = useState(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [leadSubmissionFailed, setLeadSubmissionFailed] = useState(false);
+  const [leadInstallDisplayKes, setLeadInstallDisplayKes] = useState<
+    number | null
+  >(null);
   const [agentData, setAgentData] = useState<any>(null);
   const [selectedTown, setSelectedTown] = useState("");
   const [pendingCount, setPendingCount] = useState(0);
@@ -106,13 +118,6 @@ export default function RegisterCustomerScreen() {
   const [commissionRates, setCommissionRates] = useState<AirtelCommissionRates>(
     getCachedCommissionRates
   );
-
-  const [fontsLoaded] = useFonts({
-    Poppins_600SemiBold,
-    Poppins_700Bold,
-    Inter_400Regular,
-    Inter_500Medium,
-  });
 
   const {
     control,
@@ -140,6 +145,23 @@ export default function RegisterCustomerScreen() {
   });
 
   const watchedTown = watch("installationTown");
+
+  useEffect(() => {
+    if (isLeadRegistration) {
+      setRegistrationMode("legacy_wam");
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const result = await fetchRegistrationMode();
+      if (!cancelled) {
+        setRegistrationMode(result.mode);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isLeadRegistration]);
 
   useEffect(() => {
     if (watchedTown) {
@@ -194,6 +216,17 @@ export default function RegisterCustomerScreen() {
       }
 
       setLeadSubmissionFailed(Boolean(lead.registration_id));
+      const cfg = await fetchDispatchConfig();
+      if (!cancelled) {
+        setLeadInstallDisplayKes(
+          resolveLeadInstallDisplayKes({
+            source: lead.source,
+            submitted_by_agent_id: lead.submitted_by_agent_id,
+            preferredPackage: lead.plan_label ?? lead.preferred_package,
+            receiverFees: cfg.receiverFees,
+          }),
+        );
+      }
       reset({
         customerName: lead.customer_name ?? "",
         airtelNumber: lead.primary_phone ?? "",
@@ -568,7 +601,55 @@ export default function RegisterCustomerScreen() {
     }
   };
 
-  if (!fontsLoaded || (!agentData && !showApprovalModal)) {
+  if (!isLeadRegistration) {
+    if (registrationMode === "loading") {
+      return (
+        <View
+          style={{
+            flex: 1,
+            justifyContent: "center",
+            alignItems: "center",
+            backgroundColor: "#F5F7FA",
+          }}
+        >
+          <ActivityIndicator size="large" color="#E60012" />
+        </View>
+      );
+    }
+    if (registrationMode === "airtel_connect") {
+      if (!connectEntryPath) {
+        return (
+          <AirtelConnectPathChooser
+            onSelect={setConnectEntryPath}
+            onSubmitLead={() => router.push("/submit-airtel-lead" as any)}
+            onBack={() => router.back()}
+          />
+        );
+      }
+      return (
+        <AirtelConnectRegisterScreen
+          key={connectEntryPath}
+          entryPath={connectEntryPath}
+          onChangePath={() => setConnectEntryPath(null)}
+        />
+      );
+    }
+
+    // Legacy WAM counties: still offer lead-only submit for non-installers.
+    if (!legacyProceed) {
+      return (
+        <AirtelConnectPathChooser
+          variant="legacy"
+          onSelect={() => setLegacyProceed(true)}
+          onLegacyRegister={() => setLegacyProceed(true)}
+          onSubmitLead={() => router.push("/submit-airtel-lead" as any)}
+          onBack={() => router.back()}
+        />
+      );
+    }
+  }
+
+  if (!agentData && !showApprovalModal) {
     return (
       <View
         style={{
@@ -793,8 +874,9 @@ export default function RegisterCustomerScreen() {
                     lineHeight: 19,
                   }}
                 >
-                  This registration belongs to an inbound lead. Only the KSh 200
-                  lead-install commission applies after admin confirms installation.
+                  {leadInstallDisplayKes != null
+                    ? `This registration belongs to an inbound lead. Only the KSh ${leadInstallDisplayKes.toLocaleString()} lead-install commission applies after admin confirms installation.`
+                    : "This registration belongs to an inbound lead. Complete installation as usual; any payout is set by admin."}
                 </Text>
               </View>
             ) : null}

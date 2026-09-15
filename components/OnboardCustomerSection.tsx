@@ -1,10 +1,10 @@
 import {
-  Image,
   Pressable,
   StyleSheet,
   Text,
   View,
 } from "react-native";
+import { Image } from "expo-image";
 import { useRouter } from "expo-router";
 import Svg, { Circle, Defs, Pattern, Rect } from "react-native-svg";
 import {
@@ -85,7 +85,11 @@ export function OnboardCustomerSection() {
           <Image
             source={require("../assets/images/routers/airtel-5g-router.png")}
             style={styles.router}
-            resizeMode="contain"
+            contentFit="contain"
+            cachePolicy="memory-disk"
+            priority="high"
+            recyclingKey="airtel-router"
+            transition={0}
           />
         </View>
       </Pressable>
@@ -101,7 +105,11 @@ export function OnboardCustomerSection() {
           <Image
             source={require("../assets/images/routers/safaricom-5g-router.png")}
             style={[styles.router, styles.routerLeft]}
-            resizeMode="contain"
+            contentFit="contain"
+            cachePolicy="memory-disk"
+            priority="high"
+            recyclingKey="safaricom-router"
+            transition={0}
           />
           <View style={[styles.copyCol, styles.copyRight]}>
             <Text style={styles.brandSaf}>Safaricom</Text>

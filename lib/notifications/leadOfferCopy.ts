@@ -13,6 +13,7 @@ export type LeadOfferPreview = {
   packageLabel?: string | null;
   distanceKm?: number | null;
   isCallbackReminder?: boolean;
+  googlePlace?: { name?: string; lat?: number; lng?: number } | null;
 };
 
 export type LeadOfferNotificationCopy = {
@@ -31,10 +32,17 @@ export function capitalizeBrand(product: string): string {
 }
 
 export function formatLeadLocation(preview: LeadOfferPreview): string {
+  const placeName =
+    preview.googlePlace && typeof preview.googlePlace === "object"
+      ? String(
+          (preview.googlePlace as { name?: string }).name ?? "",
+        ).trim()
+      : "";
   const town = String(preview.installationTown ?? "").trim();
   const area = preview.roughArea ? String(preview.roughArea).trim() : "";
-  if (area && town) return `${area}, ${town}`;
-  return area || town || "Nearby";
+  const landmark = placeName || area;
+  if (landmark && town) return `${landmark}, ${town}`;
+  return landmark || town || "Nearby";
 }
 
 export function humanizePackageLabel(
@@ -86,6 +94,23 @@ export function providerAccentColor(product: string): string {
   return "#E53935";
 }
 
+/** Under 1 km → meters. Short enough for a collapsed Android body. */
+export function formatPushDistance(
+  km: number | null | undefined,
+): string {
+  const n = Number(km);
+  if (!Number.isFinite(n) || n < 0) return "";
+  if (n < 1) {
+    const meters = Math.round(n * 1000);
+    return meters < 1 ? "< 1 m from you" : `${meters} m from you`;
+  }
+  return `${Math.round(n * 10) / 10} km from you`;
+}
+
+function joinCopyParts(...parts: Array<string | null | undefined>): string {
+  return parts.map((p) => String(p ?? "").trim()).filter(Boolean).join(" · ");
+}
+
 export function formatSingleLeadOfferCopy(
   preview: LeadOfferPreview,
 ): LeadOfferNotificationCopy {
@@ -93,6 +118,7 @@ export function formatSingleLeadOfferCopy(
   const brand = capitalizeBrand(product);
   const location = formatLeadLocation(preview);
   const pkg = humanizePackageLabel(preview.packageLabel);
+  const distance = formatPushDistance(preview.distanceKm);
   const isReminder = Boolean(preview.isCallbackReminder);
 
   return {
@@ -100,7 +126,9 @@ export function formatSingleLeadOfferCopy(
     subtitle: isReminder
       ? `${brand} · Callback reminder`
       : `${brand} · New lead`,
-    message: isReminder ? `Call back · ${pkg}` : pkg,
+    message: isReminder
+      ? joinCopyParts("Call back", distance, pkg)
+      : joinCopyParts(distance, pkg),
     accentColor: providerAccentColor(product),
     product,
     leadCount: 1,
@@ -109,7 +137,12 @@ export function formatSingleLeadOfferCopy(
 
 export function formatLeadQueueLine(preview: LeadOfferPreview): string {
   const brand = capitalizeBrand(String(preview.product ?? "lead"));
-  return `${brand} · ${formatLeadLocation(preview)} · ${humanizePackageLabel(preview.packageLabel)}`;
+  return joinCopyParts(
+    brand,
+    formatLeadLocation(preview),
+    formatPushDistance(preview.distanceKm),
+    humanizePackageLabel(preview.packageLabel),
+  );
 }
 
 export function formatGroupedLeadOfferCopy(

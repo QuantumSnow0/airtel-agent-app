@@ -20,11 +20,31 @@ import {
 } from "../lib/utils/responsive";
 import type { LeadOffer, LeadOfferPreview } from "../lib/dispatch/types";
 import { humanizePackageLabel } from "../lib/notifications/leadOfferCopy";
-import { LEAD_INSTALL_COMMISSION_KES } from "../lib/commissions/leadInstallCommission";
+import { resolveLeadInstallDisplayKes } from "../lib/commissions/leadInstallCommission";
 import {
   acceptLeadOffer,
   declineLeadOffer,
 } from "../lib/services/leadOfferActionService";
+import { PlaceMapPreview } from "./PlaceMapPreview";
+import { getCachedAgentData } from "../lib/cache/agentCache";
+import {
+  formatDistanceFromYou,
+  parseGooglePlace,
+  pinDistanceKm,
+} from "../lib/google-places/parseGooglePlace";
+import { fetchDispatchConfig } from "../lib/services/leadDispatchService";
+
+function offerDistanceLabel(km: number): string {
+  const n = Number(km);
+  if (!Number.isFinite(n) || n < 0) return "";
+  if (n < 1) {
+    const meters = Math.round(n * 1000);
+    return meters < 1
+      ? "About < 1 m from you"
+      : `About ${meters} m from you`;
+  }
+  return formatDistanceFromYou(n);
+}
 
 const AIRTEL = "#E60012";
 const SAFARICOM = "#00A651";
@@ -85,12 +105,14 @@ function SwipeToAccept({
   disabled,
   loading,
   expired,
+  swipeLabel,
   onAccept,
 }: {
   brandColor: string;
   disabled: boolean;
   loading: boolean;
   expired: boolean;
+  swipeLabel: string;
   onAccept: () => void;
 }) {
   const [trackWidth, setTrackWidth] = useState(0);
@@ -230,7 +252,7 @@ function SwipeToAccept({
           ? "Offer expired"
           : loading
             ? "Accepting…"
-            : `Swipe · pocket KSh ${LEAD_INSTALL_COMMISSION_KES.toLocaleString()}`}
+            : swipeLabel}
       </Animated.Text>
 
       <Animated.View style={[styles.swipeChevrons, { opacity: chevronOpacity }]}>
@@ -276,6 +298,8 @@ export function LeadOfferModal({
   const [countdown, setCountdown] = useState(formatCountdown(""));
   const [loading, setLoading] = useState<"accept" | "decline" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [agentWorkingPlace, setAgentWorkingPlace] = useState<unknown>(null);
+  const [earnKes, setEarnKes] = useState<number | null>(null);
   const expiredHandledRef = useRef(false);
   const slideAnim = useRef(new Animated.Value(40)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -286,6 +310,41 @@ export function LeadOfferModal({
   const isReminder = Boolean(preview.isCallbackReminder);
   const brandColor = isReminder ? "#3949AB" : isSafaricom ? SAFARICOM : AIRTEL;
   const brandLabel = isSafaricom ? "Safaricom" : "Airtel";
+  const swipeLabel =
+    earnKes != null && earnKes > 0
+      ? `Swipe · pocket KSh ${earnKes.toLocaleString()}`
+      : "Swipe to accept";
+
+  useEffect(() => {
+    let cancelled = false;
+    setEarnKes(
+      resolveLeadInstallDisplayKes({
+        source: preview.source,
+        preferredPackage: preview.preferredPackage ?? preview.packageLabel,
+        receiverFees: { standard: 0, premium: 0 },
+      }),
+    );
+    void (async () => {
+      const cfg = await fetchDispatchConfig();
+      if (cancelled) return;
+      setEarnKes(
+        resolveLeadInstallDisplayKes({
+          source: preview.source,
+          preferredPackage: preview.preferredPackage ?? preview.packageLabel,
+          receiverFees: cfg.receiverFees,
+        }),
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [offer?.id, preview.source, preview.preferredPackage, preview.packageLabel]);
+
+  useEffect(() => {
+    void getCachedAgentData().then((cached) => {
+      if (cached?.working_place) setAgentWorkingPlace(cached.working_place);
+    });
+  }, []);
 
   useEffect(() => {
     if (!visible || !offer) {
@@ -349,11 +408,26 @@ export function LeadOfferModal({
     return () => clearInterval(id);
   }, [visible, offer, onExpired]);
 
+  const customerPlace = useMemo(
+    () => parseGooglePlace(preview.googlePlace),
+    [preview.googlePlace],
+  );
+
   const locationLine = useMemo(() => {
+    if (customerPlace?.name) {
+      const town = preview.installationTown?.trim();
+      return town ? `${customerPlace.name}, ${town}` : customerPlace.name;
+    }
     const parts = [preview.roughArea, preview.installationTown].filter(Boolean);
     if (parts.length) return parts.join(", ");
     return preview.county || "Nearby area";
-  }, [preview]);
+  }, [customerPlace, preview]);
+
+  const distanceKm = useMemo(() => {
+    const pinKm = pinDistanceKm(customerPlace, agentWorkingPlace);
+    if (pinKm != null) return pinKm;
+    return preview.distanceKm ?? null;
+  }, [customerPlace, agentWorkingPlace, preview.distanceKm]);
 
   const handleAccept = async () => {
     if (!offer || loading) return;
@@ -439,32 +513,43 @@ export function LeadOfferModal({
           </View>
 
           <Text style={styles.location}>{locationLine}</Text>
+          {customerPlace ? (
+            <View style={styles.mapWrap}>
+              <PlaceMapPreview
+                lat={customerPlace.lat}
+                lng={customerPlace.lng}
+                label={customerPlace.name}
+              />
+            </View>
+          ) : null}
           <Text style={styles.unlockHint}>
             {isReminder
               ? "You deferred this order — accept to continue the call & install"
               : "Accept to unlock name, phone & full address"}
           </Text>
 
-          <View style={styles.earnBanner}>
-            <View style={styles.earnShine} />
-            <View style={styles.earnLeft}>
-              <Text style={styles.earnEyebrow}>Yours on install</Text>
-              <View style={styles.earnAmountRow}>
-                <Text style={styles.earnCurrency}>KSh</Text>
-                <Text style={styles.earnAmount}>
-                  {LEAD_INSTALL_COMMISSION_KES.toLocaleString()}
-                </Text>
+          {earnKes != null && earnKes > 0 ? (
+            <View style={styles.earnBanner}>
+              <View style={styles.earnShine} />
+              <View style={styles.earnLeft}>
+                <Text style={styles.earnEyebrow}>Yours on install</Text>
+                <View style={styles.earnAmountRow}>
+                  <Text style={styles.earnCurrency}>KSh</Text>
+                  <Text style={styles.earnAmount}>
+                    {earnKes.toLocaleString()}
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.earnBadge}>
+                <MaterialIcons
+                  name="trending-up"
+                  size={scaleWidth(16)}
+                  color="#92400E"
+                />
+                <Text style={styles.earnBadgeText}>Earn</Text>
               </View>
             </View>
-            <View style={styles.earnBadge}>
-              <MaterialIcons
-                name="trending-up"
-                size={scaleWidth(16)}
-                color="#92400E"
-              />
-              <Text style={styles.earnBadgeText}>Earn</Text>
-            </View>
-          </View>
+          ) : null}
 
           <View style={styles.details}>
             {preview.packageLabel ? (
@@ -473,10 +558,14 @@ export function LeadOfferModal({
                 value={humanizePackageLabel(preview.packageLabel)}
               />
             ) : null}
-            {preview.distanceKm != null ? (
+            {distanceKm != null ? (
               <DetailRow
                 label="Distance"
-                value={`About ${preview.distanceKm} km from you`}
+                value={
+                  Number(distanceKm) < 1
+                    ? `About ${Math.max(1, Math.round(Number(distanceKm) * 1000))} m from you`
+                    : `About ${Math.round(Number(distanceKm) * 10) / 10} km from you`
+                }
               />
             ) : null}
             {preview.submittedAgoMinutes != null ? (
@@ -501,6 +590,7 @@ export function LeadOfferModal({
             disabled={!!loading || countdown.expired}
             loading={loading === "accept"}
             expired={countdown.expired}
+            swipeLabel={swipeLabel}
             onAccept={() => void handleAccept()}
           />
 
@@ -607,6 +697,9 @@ const styles = StyleSheet.create({
     color: INK,
     lineHeight: scaleFont(24),
     marginBottom: scaleHeight(4),
+  },
+  mapWrap: {
+    marginBottom: scaleHeight(10),
   },
   unlockHint: {
     fontFamily: "Inter_400Regular",

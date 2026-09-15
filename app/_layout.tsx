@@ -2,7 +2,14 @@ import * as Linking from "expo-linking";
 import { Stack, useRouter, useSegments, usePathname } from "expo-router";
 import { useEffect, useState, useRef } from "react";
 import { AppState, StatusBar } from "react-native";
+import { useFonts } from "expo-font";
+import * as SplashScreen from "expo-splash-screen";
+import { APP_FONTS } from "../lib/fonts";
 import { checkAppVersion } from "../lib/services/appVersionService";
+import {
+  applyOtaUpdateIfAvailable,
+  useApplyPendingOtaUpdate,
+} from "../lib/services/otaUpdateService";
 import {
   activateAgentNotifications,
   ensureAllNotificationChannels,
@@ -20,12 +27,17 @@ import {
 import { supabase } from "../lib/supabase";
 import { LeadDispatchManager } from "../components/LeadDispatchManager";
 import { NotificationDetailHost } from "../components/NotificationDetailModal";
-import { HomeDashboardSkeleton } from "../components/HomeDashboardSkeleton";
 import {
   extractOfferIdFromPushData,
   promptLeadOfferModal,
   refreshLeadOfferQueue,
 } from "../lib/dispatch/leadOfferBridge";
+import {
+  getPostAuthHref,
+  isAuthOpenRoute,
+  isSetWorkingLocationRoute,
+  isWorkingPlaceReady,
+} from "../lib/google-places/workingPlaceGate";
 import {
   acceptLeadOffer,
   declineLeadOffer,
@@ -45,13 +57,18 @@ const sessionCheckCompleted = { current: false };
 const initializationCompleted = { current: false };
 const isAppBlockedRef = { current: false }; // Track if app is blocked for update
 
+SplashScreen.preventAutoHideAsync().catch(() => {});
+
 export default function RootLayout() {
+  const [fontsLoaded] = useFonts(APP_FONTS);
   const [isInitializing, setIsInitializing] = useState(true);
   const [needsUpdate, setNeedsUpdate] = useState(false);
   const [isBlocked, setIsBlocked] = useState(false);
   const router = useRouter();
   const segments = useSegments();
   const pathname = usePathname();
+
+  useApplyPendingOtaUpdate(!isBlocked);
 
   useEffect(() => {
     let isMounted = true;
@@ -78,147 +95,94 @@ export default function RootLayout() {
       };
     }
 
-    // Check session immediately (from local storage - very fast)
-    // This prevents showing welcome page if user is already signed in
-    // Add retry logic for session restoration after force close
-    // NOTE: This will be called AFTER version check (only if not blocked)
-    const checkSessionWithRetry = async (retries = 0): Promise<void> => {
-      // Prevent multiple concurrent session checks
+    const finishInitializing = () => {
+      if (isMounted && !isAppBlockedRef.current && !initializationCompleted.current) {
+        setIsInitializing(false);
+        initializationCompleted.current = true;
+      }
+    };
+
+    const checkSessionOnce = async (): Promise<void> => {
       if (sessionCheckCompleted.current) {
-        console.log("⏭️ Session check already completed, skipping");
-        if (isMounted && !initializationCompleted.current) {
-          setIsInitializing(false);
-          initializationCompleted.current = true;
-        }
+        finishInitializing();
         return;
       }
-
-      // Don't proceed if app is blocked (check both state and ref)
       if (isBlocked || isAppBlockedRef.current) {
-        console.log("🚫 App is blocked - skipping session check");
         return;
       }
 
       try {
-        const { data: { session }, error } = await supabase.auth.getSession();
+        const {
+          data: { session },
+          error,
+        } = await supabase.auth.getSession();
         sessionChecked = true;
-        
-        // Check again if blocked (might have changed during async operation)
+
         if (isBlocked || isAppBlockedRef.current) {
-          console.log("🚫 App became blocked during session check - aborting");
           return;
         }
-        
+
         if (error) {
           console.error("Error getting session:", error);
-          // If it's a network error and we have retries left, try again
-          if (retries < 3 && (error.message?.includes("network") || error.message?.includes("timeout"))) {
-            await new Promise(resolve => setTimeout(resolve, 500));
-            return checkSessionWithRetry(retries + 1);
-          }
-          // Other errors or max retries - show welcome page
           sessionCheckCompleted.current = true;
-          if (isMounted && !isBlocked) {
-            setIsInitializing(false);
-            initializationCompleted.current = true;
-          }
+          finishInitializing();
           return;
         }
-        
+
         if (session?.user && isMounted && !isBlocked && !isAppBlockedRef.current) {
-          // User is signed in - redirect immediately to dashboard
           console.log("✅ Session found - redirecting to dashboard");
           sessionCheckCompleted.current = true;
-          handleAuthChange(session).then(() => {
-            // After navigation, clear loading
-            if (isMounted && !isBlocked) {
-              setIsInitializing(false);
-              initializationCompleted.current = true;
-            }
-          }).catch((error) => {
-            console.error("Error in handleAuthChange:", error);
-            if (isMounted && !isBlocked) {
-              setIsInitializing(false);
-              initializationCompleted.current = true;
-            }
-          });
-        } else if (!session && retries < 3) {
-          // No session but might still be restoring - retry with increasing delay
-          // AsyncStorage might need time to initialize after force close
-          const delay = Math.min(300 * (retries + 1), 1000); // 300ms, 600ms, 900ms, max 1000ms
-          console.log(`⏳ No session found, retrying in ${delay}ms (attempt ${retries + 1}/3)`);
-          await new Promise(resolve => setTimeout(resolve, delay));
-          return checkSessionWithRetry(retries + 1);
-        } else {
-          // No session after retries - show welcome page
-          console.log("❌ No session found after retries - showing welcome page");
-          sessionCheckCompleted.current = true;
-          if (isMounted && !isBlocked) {
-            setIsInitializing(false);
-            initializationCompleted.current = true;
+          try {
+            await handleAuthChange(session);
+          } catch (authError) {
+            console.error("Error in handleAuthChange:", authError);
           }
+          finishInitializing();
+          return;
         }
+
+        sessionCheckCompleted.current = true;
+        finishInitializing();
       } catch (error) {
-        console.error("Error in checkSessionWithRetry:", error);
-        // Only mark as completed if we've exhausted retries
-        if (retries >= 3) {
-          sessionChecked = true;
-          sessionCheckCompleted.current = true;
-          if (isMounted && !isBlocked) {
-            setIsInitializing(false);
-            initializationCompleted.current = true;
-          }
-        } else {
-          // Retry on exception (might be AsyncStorage not ready)
-          const delay = Math.min(300 * (retries + 1), 1000);
-          await new Promise(resolve => setTimeout(resolve, delay));
-          return checkSessionWithRetry(retries + 1);
-        }
+        console.error("Error in checkSessionOnce:", error);
+        sessionChecked = true;
+        sessionCheckCompleted.current = true;
+        finishInitializing();
       }
     };
 
-    // Fallback timer - if session check takes too long, show app anyway
-    // Increased to 3 seconds to allow AsyncStorage time to restore session after force close
     const maxLoadTimer = setTimeout(() => {
-      if (isMounted && !sessionChecked && !initializationCompleted.current && !isBlocked) {
-        console.log("Max load time reached (3s) - showing app (session may still be restoring)");
-        setIsInitializing(false);
-        initializationCompleted.current = true;
-        // Don't set sessionCheckCompleted here - let the async check complete
+      if (isMounted && !initializationCompleted.current && !isBlocked) {
+        console.warn("Auth bootstrap timeout — showing app");
+        sessionCheckCompleted.current = true;
+        finishInitializing();
       }
-    }, 3000); // 3 seconds - gives AsyncStorage time to restore after force close
+    }, 5000);
 
-    // Check app version FIRST (before session check) - this must block everything if update is required
+    checkSessionOnce();
+
     checkAppVersion()
       .then((versionCheck) => {
-        if (isMounted) {
-          if (versionCheck.isBlocked) {
-            // App version is too old and force update is enabled
-            console.log("🚫 App version blocked - update required - BLOCKING ALL NAVIGATION");
-            setNeedsUpdate(true);
-            setIsBlocked(true);
-            isAppBlockedRef.current = true; // Set ref to prevent navigation
-            setIsInitializing(false);
-            sessionCheckCompleted.current = true; // Prevent session check from running
-            router.replace("/update-required" as any);
-            return; // Exit early - don't proceed with session check
-          } else if (versionCheck.needsUpdate) {
-            // Update available but not forced
-            console.log("📱 App update available (not forced)");
-            setNeedsUpdate(true);
-            // Continue with app, but you could show a non-blocking banner
-          }
-          
-          // Only proceed with session check if NOT blocked
-          if (!versionCheck.isBlocked) {
-            checkSessionWithRetry();
-          }
+        if (!isMounted) return;
+        if (versionCheck.isBlocked) {
+          console.log("🚫 App version blocked - update required - BLOCKING ALL NAVIGATION");
+          setNeedsUpdate(true);
+          setIsBlocked(true);
+          isAppBlockedRef.current = true;
+          sessionCheckCompleted.current = true;
+          setIsInitializing(false);
+          initializationCompleted.current = true;
+          router.replace("/update-required" as any);
+          return;
         }
+        if (versionCheck.needsUpdate) {
+          console.log("📱 App update available (not forced)");
+          setNeedsUpdate(true);
+        }
+        void applyOtaUpdateIfAvailable();
       })
       .catch((error) => {
         console.error("Version check error:", error);
-        // On error, allow app to continue with session check
-        checkSessionWithRetry();
       });
 
     // Listen for auth state changes
@@ -317,6 +281,9 @@ export default function RootLayout() {
     const appStateSub = AppState.addEventListener("change", (nextState) => {
       if (nextState !== "active") return;
       void (async () => {
+        if (!isAppBlockedRef.current) {
+          await applyOtaUpdateIfAvailable();
+        }
         const {
           data: { session },
         } = await supabase.auth.getSession();
@@ -335,6 +302,48 @@ export default function RootLayout() {
       appStateSub.remove();
     };
   }, []);
+
+  useEffect(() => {
+    if (isInitializing || isBlocked) return;
+    if (
+      isAuthOpenRoute(pathname, segments) &&
+      !isSetWorkingLocationRoute(pathname, segments)
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session?.user?.email_confirmed_at) return;
+      if (
+        isWorkingPlaceReady() &&
+        !isSetWorkingLocationRoute(pathname, segments)
+      ) {
+        return;
+      }
+      const href = await getPostAuthHref(session.user.id);
+      if (cancelled) return;
+      if (
+        href === "/set-working-location" &&
+        !isSetWorkingLocationRoute(pathname, segments)
+      ) {
+        router.replace("/set-working-location" as any);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [pathname, segments, isInitializing, isBlocked, router]);
+
+  useEffect(() => {
+    if (fontsLoaded && !isInitializing) {
+      SplashScreen.hideAsync().catch(() => {});
+    }
+  }, [fontsLoaded, isInitializing]);
 
   const checkSession = async (): Promise<void> => {
     try {
@@ -420,8 +429,8 @@ export default function RootLayout() {
           return;
         }
 
-        // Always navigate to dashboard (dashboard handles pending/approved status display)
-        router.replace("/dashboard" as any);
+        const href = await getPostAuthHref(session.user.id);
+        router.replace(href as any);
       } catch (agentError) {
         console.error("Error checking agent status:", agentError);
         // On error, redirect to dashboard (will show pending status) - but only if not blocked
@@ -704,8 +713,8 @@ export default function RootLayout() {
     }
   };
 
-  if (isInitializing) {
-    return <HomeDashboardSkeleton />;
+  if (!fontsLoaded || isInitializing) {
+    return null;
   }
 
   return (

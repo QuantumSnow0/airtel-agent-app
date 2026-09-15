@@ -220,6 +220,11 @@ export async function handleNotificationOpen(
     }
     case "LEAD_OVERDUE":
     case "LEAD_INSTALLED":
+    case "LEAD_SUBMITTED_STATUS":
+      if (type === "LEAD_SUBMITTED_STATUS") {
+        router.push("/leads" as any);
+        break;
+      }
       if (data.relatedId) {
         router.push(`/lead/${data.relatedId}` as any);
       } else {

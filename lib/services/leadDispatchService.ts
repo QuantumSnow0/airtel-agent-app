@@ -5,12 +5,19 @@
 
 import { supabase } from "../supabase";
 import type { InboundLead, LeadOffer, LeadOfferPreview } from "../dispatch/types";
+import type { LeadPackageFees } from "../commissions/leadInstallCommission";
 
 export type DispatchConfig = {
   offer_timeout_minutes: number;
   sla_hours: number;
   max_open_leads_per_agent: number;
   max_open_leads_enabled: boolean;
+  /** @deprecated prefer submitterFees */
+  lead_submitter_commission_kes: number;
+  /** @deprecated prefer receiverFees */
+  lead_receiver_commission_kes: number;
+  submitterFees: LeadPackageFees;
+  receiverFees: LeadPackageFees;
 };
 
 function mapOffer(row: Record<string, unknown>): LeadOffer {
@@ -25,6 +32,15 @@ function mapOffer(row: Record<string, unknown>): LeadOffer {
   };
 }
 
+function readKes(
+  value: unknown,
+  fallback = 0,
+): number {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return fallback;
+  return Math.round(n);
+}
+
 /** Read global dispatch knobs for UI countdowns. */
 export async function fetchDispatchConfig(): Promise<DispatchConfig> {
   const defaults: DispatchConfig = {
@@ -32,17 +48,45 @@ export async function fetchDispatchConfig(): Promise<DispatchConfig> {
     sla_hours: 24,
     max_open_leads_per_agent: 3,
     max_open_leads_enabled: true,
+    lead_submitter_commission_kes: 0,
+    lead_receiver_commission_kes: 0,
+    submitterFees: { standard: 0, premium: 0 },
+    receiverFees: { standard: 0, premium: 0 },
   };
 
   const { data } = await supabase
     .from("dispatch_config")
     .select(
-      "offer_timeout_minutes, sla_hours, max_open_leads_per_agent, max_open_leads_enabled",
+      "offer_timeout_minutes, sla_hours, max_open_leads_per_agent, max_open_leads_enabled, lead_submitter_commission_kes, lead_receiver_commission_kes, lead_submitter_commission_standard_kes, lead_submitter_commission_premium_kes, lead_receiver_commission_standard_kes, lead_receiver_commission_premium_kes",
     )
     .limit(1)
     .maybeSingle();
 
   if (!data) return defaults;
+
+  const legacySubmitter = readKes(data.lead_submitter_commission_kes);
+  const legacyReceiver = readKes(data.lead_receiver_commission_kes);
+  const submitterFees: LeadPackageFees = {
+    standard: readKes(
+      data.lead_submitter_commission_standard_kes,
+      legacySubmitter,
+    ),
+    premium: readKes(
+      data.lead_submitter_commission_premium_kes,
+      legacySubmitter,
+    ),
+  };
+  const receiverFees: LeadPackageFees = {
+    standard: readKes(
+      data.lead_receiver_commission_standard_kes,
+      legacyReceiver,
+    ),
+    premium: readKes(
+      data.lead_receiver_commission_premium_kes,
+      legacyReceiver,
+    ),
+  };
+
   return {
     offer_timeout_minutes: data.offer_timeout_minutes ?? defaults.offer_timeout_minutes,
     sla_hours: data.sla_hours ?? defaults.sla_hours,
@@ -50,6 +94,18 @@ export async function fetchDispatchConfig(): Promise<DispatchConfig> {
       data.max_open_leads_per_agent ?? defaults.max_open_leads_per_agent,
     max_open_leads_enabled:
       data.max_open_leads_enabled ?? defaults.max_open_leads_enabled,
+    lead_submitter_commission_kes: Math.max(
+      submitterFees.standard,
+      submitterFees.premium,
+      legacySubmitter,
+    ),
+    lead_receiver_commission_kes: Math.max(
+      receiverFees.standard,
+      receiverFees.premium,
+      legacyReceiver,
+    ),
+    submitterFees,
+    receiverFees,
   };
 }
 

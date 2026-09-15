@@ -17,16 +17,6 @@ import {
 import { useRouter } from "expo-router";
 import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useFonts } from "expo-font";
-import {
-  Poppins_600SemiBold,
-  Poppins_700Bold,
-} from "@expo-google-fonts/poppins";
-import {
-  Inter_400Regular,
-  Inter_500Medium,
-  Inter_600SemiBold,
-} from "@expo-google-fonts/inter";
 import {
   SafeAreaView,
   useSafeAreaInsets,
@@ -59,14 +49,6 @@ export default function RegisterSafaricomCustomerScreen() {
   const [showApprovalModal, setShowApprovalModal] = useState(false);
   const [customerConsent, setCustomerConsent] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-
-  const [fontsLoaded] = useFonts({
-    Poppins_600SemiBold,
-    Poppins_700Bold,
-    Inter_400Regular,
-    Inter_500Medium,
-    Inter_600SemiBold,
-  });
 
   const {
     control,
@@ -504,7 +486,7 @@ export default function RegisterSafaricomCustomerScreen() {
     router.back();
   };
 
-  if (!fontsLoaded || (!agentData && !showApprovalModal)) {
+  if (!agentData && !showApprovalModal) {
     return (
       <View style={styles.loadingRoot}>
         <ActivityIndicator size="large" color={SAF_GREEN} />

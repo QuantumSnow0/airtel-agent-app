@@ -16,12 +16,6 @@ import { useRouter } from "expo-router";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useFonts } from "expo-font";
-import {
-  Poppins_600SemiBold,
-  Poppins_700Bold,
-} from "@expo-google-fonts/poppins";
-import { Inter_400Regular, Inter_500Medium } from "@expo-google-fonts/inter";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../lib/supabase";
 
@@ -37,13 +31,6 @@ export default function ForgotPasswordScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [emailSent, setEmailSent] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
-
-  const [fontsLoaded] = useFonts({
-    Poppins_600SemiBold,
-    Poppins_700Bold,
-    Inter_400Regular,
-    Inter_500Medium,
-  });
 
   const {
     control,
@@ -83,10 +70,6 @@ export default function ForgotPasswordScreen() {
       keyboardDidHideListener.remove();
     };
   }, []);
-
-  if (!fontsLoaded) {
-    return null;
-  }
 
   const onSubmit = async (data: ForgotPasswordFormData) => {
     setIsLoading(true);

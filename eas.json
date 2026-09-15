@@ -1,36 +1,43 @@
 {
   "cli": {
-    "version": ">= 5.2.0"
+    "version": ">= 5.2.0",
+    "appVersionSource": "local"
   },
   "build": {
     "development": {
       "developmentClient": true,
       "distribution": "internal",
+      "channel": "development",
       "env": {
         "EXPO_PUBLIC_SUPABASE_URL": "https://olaounggwgxpbenmuvnl.supabase.co",
-        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9sYW91bmdnd2d4cGJlbm11dm5sIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwMjMzNDcsImV4cCI6MjA4MzU5OTM0N30.V-mFWgiduGoQleWh6XMj6_h2ua4Fy7qvM4ZL4SUFFGA"
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9sYW91bmdnd2d4cGJlbm11dm5sIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwMjMzNDcsImV4cCI6MjA4MzU5OTM0N30.V-mFWgiduGoQleWh6XMj6_h2ua4Fy7qvM4ZL4SUFFGA",
+        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "AIzaSyDfJTMRQkpXjNScMA2ubp1YxFoS9SNqqVM"
       }
     },
     "preview": {
       "distribution": "internal",
+      "channel": "preview",
       "prebuildCommand": "node scripts/patch-lead-notifications-native.js && node scripts/verify-lead-notifications-native.js",
       "android": {
         "buildType": "apk"
       },
       "env": {
         "EXPO_PUBLIC_SUPABASE_URL": "https://olaounggwgxpbenmuvnl.supabase.co",
-        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9sYW91bmdnd2d4cGJlbm11dm5sIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwMjMzNDcsImV4cCI6MjA4MzU5OTM0N30.V-mFWgiduGoQleWh6XMj6_h2ua4Fy7qvM4ZL4SUFFGA"
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9sYW91bmdnd2d4cGJlbm11dm5sIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwMjMzNDcsImV4cCI6MjA4MzU5OTM0N30.V-mFWgiduGoQleWh6XMj6_h2ua4Fy7qvM4ZL4SUFFGA",
+        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "AIzaSyDfJTMRQkpXjNScMA2ubp1YxFoS9SNqqVM"
       }
     },
     "production": {
       "distribution": "store",
+      "channel": "production",
       "prebuildCommand": "node scripts/patch-lead-notifications-native.js && node scripts/verify-lead-notifications-native.js",
       "android": {
         "buildType": "app-bundle"
       },
       "env": {
         "EXPO_PUBLIC_SUPABASE_URL": "https://olaounggwgxpbenmuvnl.supabase.co",
-        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9sYW91bmdnd2d4cGJlbm11dm5sIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwMjMzNDcsImV4cCI6MjA4MzU5OTM0N30.V-mFWgiduGoQleWh6XMj6_h2ua4Fy7qvM4ZL4SUFFGA"
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9sYW91bmdnd2d4cGJlbm11dm5sIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwMjMzNDcsImV4cCI6MjA4MzU5OTM0N30.V-mFWgiduGoQleWh6XMj6_h2ua4Fy7qvM4ZL4SUFFGA",
+        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "AIzaSyDfJTMRQkpXjNScMA2ubp1YxFoS9SNqqVM"
       }
     }
   },

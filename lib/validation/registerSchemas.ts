@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parseGooglePlace } from "../google-places/parseGooglePlace";
 
 // Step 1: Agent Information Schema
 export const personalInfoSchema = z
@@ -29,14 +30,15 @@ export const contactInfoSchema = z.object({
       /^\+?[0-9]+$/,
       "Phone number must contain only digits, optionally starting with +"
     ),
-  town: z.string().min(1, "Please select a town"),
-  area: z.string().min(1, "Please enter a location"),
+  workingPlace: z.custom((value) => parseGooglePlace(value) !== null, {
+    message: "Select a working location from the search results",
+  }),
 });
 
 export type PersonalInfoFormData = z.infer<typeof personalInfoSchema>;
 export type ContactInfoFormData = z.infer<typeof contactInfoSchema>;
 
-/** Profile edit — name + contact/location (no email/password). */
+/** Profile edit — name + phones (working location is set via Places). */
 export const editProfileSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters"),
   airtelPhone: z
@@ -53,8 +55,6 @@ export const editProfileSchema = z.object({
       /^\+?[0-9]+$/,
       "Phone number must contain only digits, optionally starting with +"
     ),
-  town: z.string().min(1, "Please select a town"),
-  area: z.string().min(1, "Please enter a location"),
 });
 
 export type EditProfileFormData = z.infer<typeof editProfileSchema>;

@@ -6,21 +6,12 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useFonts } from "expo-font";
-import {
-  Poppins_600SemiBold,
-  Poppins_700Bold,
-} from "@expo-google-fonts/poppins";
-import {
-  Inter_400Regular,
-  Inter_500Medium,
-  Inter_600SemiBold,
-} from "@expo-google-fonts/inter";
 import { supabase } from "../../lib/supabase";
 import {
   fetchRegistrationDetail,
@@ -33,6 +24,7 @@ import {
 import type { RegistrationSource } from "../../lib/registrations/unifiedListRegistration";
 import { syncRegistrationFromSupabase } from "../../lib/services/syncService";
 import { isOnline } from "../../lib/services/syncService";
+import { updateAirtelConnectOrderId } from "../../lib/services/airtelConnectRegistrationService";
 import {
   scaleFont,
   scaleHeight,
@@ -59,14 +51,8 @@ export default function RegistrationDetailScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [syncing, setSyncing] = useState(false);
-
-  const [fontsLoaded] = useFonts({
-    Poppins_600SemiBold,
-    Poppins_700Bold,
-    Inter_400Regular,
-    Inter_500Medium,
-    Inter_600SemiBold,
-  });
+  const [orderIdDraft, setOrderIdDraft] = useState("");
+  const [savingOrderId, setSavingOrderId] = useState(false);
 
   const loadDetail = useCallback(async () => {
     if (!id) return;
@@ -85,6 +71,7 @@ export default function RegistrationDetailScreen() {
     } else {
       setError(null);
       setDetail(result.detail);
+      setOrderIdDraft(result.detail.airtel_connect_order_id ?? "");
     }
   }, [id, registrationSource, router]);
 
@@ -119,7 +106,21 @@ export default function RegistrationDetailScreen() {
     }
   };
 
-  if (!fontsLoaded) return null;
+  const handleSaveOrderId = async () => {
+    if (!id || registrationSource !== "airtel") return;
+    setSavingOrderId(true);
+    try {
+      const result = await updateAirtelConnectOrderId(id, orderIdDraft);
+      if (!result.success) {
+        Alert.alert("Could not save", result.error);
+        return;
+      }
+      Alert.alert("Saved", "Airtel Connect Order ID updated.");
+      await loadDetail();
+    } finally {
+      setSavingOrderId(false);
+    }
+  };
 
   const statusColors =
     REGISTRATION_STATUS_COLORS[detail?.status ?? "pending"] ??
@@ -265,6 +266,51 @@ export default function RegistrationDetailScreen() {
                 />
               ) : null}
             </View>
+
+            {detail.source === "airtel" && detail.airtel_connect_entry ? (
+              <>
+                <Text style={styles.sectionTitle}>Airtel Connect</Text>
+                <View style={styles.infoCard}>
+                  <DetailRow
+                    label="Path"
+                    value={
+                      detail.airtel_connect_entry === "connect_first"
+                        ? "Airtel Connect → WAM"
+                        : "WAM → Airtel Connect"
+                    }
+                  />
+                  {!detail.airtel_connect_order_id ? (
+                    <View style={styles.warnBox}>
+                      <Text style={styles.warnText}>
+                        Order ID missing — needed for payment. Add it below.
+                      </Text>
+                    </View>
+                  ) : null}
+                  <Text style={styles.detailLabel}>Order ID</Text>
+                  <TextInput
+                    style={styles.orderInput}
+                    value={orderIdDraft}
+                    onChangeText={setOrderIdDraft}
+                    placeholder="e.g. AC-123456789"
+                    placeholderTextColor="#AAAAAA"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                  <TouchableOpacity
+                    style={[
+                      styles.syncBtn,
+                      savingOrderId && styles.syncBtnDisabled,
+                    ]}
+                    onPress={() => void handleSaveOrderId()}
+                    disabled={savingOrderId}
+                  >
+                    <Text style={styles.syncBtnText}>
+                      {savingOrderId ? "Saving…" : "Save Order ID"}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : null}
 
             {detail.source === "airtel" ? (
               <>
@@ -434,6 +480,32 @@ const styles = StyleSheet.create({
     fontSize: scaleFont(14),
     fontFamily: "Inter_400Regular",
     color: "#333333",
+  },
+  warnBox: {
+    backgroundColor: "#FFFBEB",
+    borderWidth: 1,
+    borderColor: "#FDE68A",
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 10,
+  },
+  warnText: {
+    fontSize: scaleFont(12),
+    fontFamily: "Inter_500Medium",
+    color: "#B45309",
+    lineHeight: scaleFont(18),
+  },
+  orderInput: {
+    borderWidth: 1,
+    borderColor: "#E0E0E0",
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: scaleFont(14),
+    fontFamily: "Inter_400Regular",
+    color: "#333333",
+    marginTop: 4,
+    backgroundColor: "#FAFAFA",
   },
   syncBtn: {
     marginTop: 12,

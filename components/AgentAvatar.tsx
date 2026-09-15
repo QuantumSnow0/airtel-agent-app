@@ -59,7 +59,9 @@ export function AgentAvatar({
           source={{ uri }}
           style={[styles.image, { width: size, height: size, borderRadius: size / 2 }]}
           contentFit="cover"
-          transition={200}
+          cachePolicy="memory-disk"
+          priority="high"
+          transition={0}
           onError={() => setImageFailed(true)}
           accessibilityLabel="Agent avatar"
         />

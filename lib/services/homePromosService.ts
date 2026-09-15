@@ -1,9 +1,5 @@
 import { supabase } from "../supabase";
-import {
-  HOME_PROMO_FIXTURES,
-  type HomePromoCtaAction,
-  type HomePromoSlide,
-} from "../homePromoFixtures";
+import type { HomePromoCtaAction, HomePromoSlide } from "../homePromoFixtures";
 
 type HomePromoRow = {
   id: string;
@@ -23,7 +19,14 @@ function isCtaAction(value: string): value is HomePromoCtaAction {
   );
 }
 
-export async function fetchHomePromos(): Promise<HomePromoSlide[]> {
+export type HomePromosFetchResult = {
+  slides: HomePromoSlide[];
+  /** False when the request failed — empty then does not mean "no promos". */
+  ok: boolean;
+};
+
+/** Active admin promos. `ok: true` and empty slides means the backend has none. */
+export async function fetchHomePromos(): Promise<HomePromosFetchResult> {
   try {
     const { data, error } = await supabase
       .from("home_promos")
@@ -34,11 +37,11 @@ export async function fetchHomePromos(): Promise<HomePromoSlide[]> {
       .order("sort_order", { ascending: true })
       .order("created_at", { ascending: true });
 
-    if (error || !data?.length) {
-      return HOME_PROMO_FIXTURES;
+    if (error) {
+      return { slides: [], ok: false };
     }
 
-    const slides: HomePromoSlide[] = (data as HomePromoRow[])
+    const slides = ((data ?? []) as HomePromoRow[])
       .filter((row) => isCtaAction(row.cta_action) && !!row.image_url)
       .map((row) => ({
         id: row.id,
@@ -49,8 +52,8 @@ export async function fetchHomePromos(): Promise<HomePromoSlide[]> {
         ctaAction: row.cta_action as HomePromoCtaAction,
       }));
 
-    return slides.length > 0 ? slides : HOME_PROMO_FIXTURES;
+    return { slides, ok: true };
   } catch {
-    return HOME_PROMO_FIXTURES;
+    return { slides: [], ok: false };
   }
 }

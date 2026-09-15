@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  Keyboard,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -14,16 +13,6 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useFonts } from "expo-font";
-import {
-  Poppins_600SemiBold,
-  Poppins_700Bold,
-} from "@expo-google-fonts/poppins";
-import {
-  Inter_400Regular,
-  Inter_500Medium,
-  Inter_600SemiBold,
-} from "@expo-google-fonts/inter";
 import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { supabase } from "../lib/supabase";
@@ -31,7 +20,6 @@ import {
   editProfileSchema,
   type EditProfileFormData,
 } from "../lib/validation/registerSchemas";
-import TownPickerModal from "../components/register/TownPickerModal";
 import { registerStyles } from "../components/register/styles";
 import {
   saveAgentDataToCache,
@@ -49,22 +37,11 @@ export default function EditProfileScreen() {
   const scrollViewRef = useRef<ScrollView>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [showTownPicker, setShowTownPicker] = useState(false);
   const [agentId, setAgentId] = useState<string | null>(null);
-
-  const [fontsLoaded] = useFonts({
-    Poppins_600SemiBold,
-    Poppins_700Bold,
-    Inter_400Regular,
-    Inter_500Medium,
-    Inter_600SemiBold,
-  });
 
   const {
     control,
     handleSubmit,
-    setValue,
-    watch,
     reset,
     formState: { isDirty },
   } = useForm<EditProfileFormData>({
@@ -73,8 +50,6 @@ export default function EditProfileScreen() {
       name: "",
       airtelPhone: "",
       safaricomPhone: "",
-      town: "",
-      area: "",
     },
   });
 
@@ -92,7 +67,7 @@ export default function EditProfileScreen() {
       const { data: agent, error } = await supabase
         .from("agents")
         .select(
-          "id, email, name, airtel_phone, safaricom_phone, town, area, status, created_at, updated_at, total_earnings, available_balance"
+          "id, email, name, airtel_phone, safaricom_phone, town, area, status, created_at, updated_at, total_earnings, available_balance, working_place, working_place_updated_at"
         )
         .eq("id", user.id)
         .maybeSingle();
@@ -108,8 +83,6 @@ export default function EditProfileScreen() {
         name: agent.name ?? "",
         airtelPhone: agent.airtel_phone ?? "",
         safaricomPhone: agent.safaricom_phone ?? "",
-        town: agent.town ?? "",
-        area: agent.area ?? "",
       });
     } finally {
       setLoading(false);
@@ -130,13 +103,11 @@ export default function EditProfileScreen() {
           name: data.name.trim(),
           airtel_phone: data.airtelPhone.trim(),
           safaricom_phone: data.safaricomPhone.trim(),
-          town: data.town.trim(),
-          area: data.area.trim(),
           updated_at: new Date().toISOString(),
         })
         .eq("id", agentId)
         .select(
-          "id, email, name, airtel_phone, safaricom_phone, town, area, status, created_at, updated_at, total_earnings, available_balance"
+          "id, email, name, airtel_phone, safaricom_phone, town, area, status, created_at, updated_at, total_earnings, available_balance, working_place, working_place_updated_at"
         )
         .single();
 
@@ -157,6 +128,8 @@ export default function EditProfileScreen() {
         updated_at: updated.updated_at,
         total_earnings: updated.total_earnings,
         available_balance: updated.available_balance,
+        working_place: updated.working_place,
+        working_place_updated_at: updated.working_place_updated_at,
       };
       await saveAgentDataToCache(cached);
 
@@ -172,8 +145,6 @@ export default function EditProfileScreen() {
       setSaving(false);
     }
   };
-
-  if (!fontsLoaded) return null;
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -307,76 +278,6 @@ export default function EditProfileScreen() {
                   )}
                 />
               </View>
-
-              <View style={registerStyles.fieldContainer}>
-                <Text style={registerStyles.label}>Town</Text>
-                <Controller
-                  control={control}
-                  name="town"
-                  render={({ field: { value }, fieldState: { error } }) => (
-                    <>
-                      <TouchableOpacity
-                        style={[
-                          registerStyles.input,
-                          registerStyles.dropdownButton,
-                          error && registerStyles.inputError,
-                        ]}
-                        onPress={() => {
-                          Keyboard.dismiss();
-                          setShowTownPicker(true);
-                        }}
-                        activeOpacity={0.7}
-                      >
-                        <Text
-                          style={[
-                            registerStyles.dropdownText,
-                            !value && registerStyles.dropdownPlaceholder,
-                          ]}
-                        >
-                          {value || "Select town"}
-                        </Text>
-                        <Text style={registerStyles.dropdownArrow}>▼</Text>
-                      </TouchableOpacity>
-                      {error ? (
-                        <Text style={registerStyles.errorText}>
-                          {error.message}
-                        </Text>
-                      ) : null}
-                    </>
-                  )}
-                />
-              </View>
-
-              <View style={registerStyles.fieldContainer}>
-                <Text style={registerStyles.label}>Area</Text>
-                <Controller
-                  control={control}
-                  name="area"
-                  render={({
-                    field: { onChange, onBlur, value },
-                    fieldState: { error },
-                  }) => (
-                    <>
-                      <TextInput
-                        style={[
-                          registerStyles.input,
-                          error && registerStyles.inputError,
-                        ]}
-                        placeholder="Enter area"
-                        placeholderTextColor="#999999"
-                        value={value}
-                        onChangeText={onChange}
-                        onBlur={onBlur}
-                      />
-                      {error ? (
-                        <Text style={registerStyles.errorText}>
-                          {error.message}
-                        </Text>
-                      ) : null}
-                    </>
-                  )}
-                />
-              </View>
             </View>
 
             <TouchableOpacity
@@ -397,16 +298,6 @@ export default function EditProfileScreen() {
           </ScrollView>
         </KeyboardAvoidingView>
       )}
-
-      <TownPickerModal
-        visible={showTownPicker}
-        selectedTown={watch("town")}
-        onClose={() => setShowTownPicker(false)}
-        onSelectTown={(town) => {
-          setValue("town", town, { shouldDirty: true, shouldValidate: true });
-          setShowTownPicker(false);
-        }}
-      />
     </View>
   );
 }

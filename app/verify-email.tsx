@@ -11,15 +11,35 @@ import {
   TextInput,
 } from "react-native";
 import { useRouter, useLocalSearchParams } from "expo-router";
-import { useFonts } from "expo-font";
-import {
-  Poppins_600SemiBold,
-  Poppins_700Bold,
-} from "@expo-google-fonts/poppins";
-import { Inter_400Regular, Inter_500Medium } from "@expo-google-fonts/inter";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../lib/supabase";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import {
+  deriveTownAreaFromPlace,
+  parseGooglePlace,
+} from "../lib/google-places/parseGooglePlace";
+
+function agentProfileFromMetadata(
+  userId: string,
+  email: string,
+  metadata: Record<string, unknown>,
+) {
+  const place = parseGooglePlace(metadata.working_place);
+  const derived = place ? deriveTownAreaFromPlace(place) : null;
+  return {
+    id: userId,
+    email,
+    name: String(metadata.name ?? ""),
+    airtel_phone: (metadata.airtel_phone as string | null) || null,
+    safaricom_phone: (metadata.safaricom_phone as string | null) || null,
+    town: (metadata.town as string | null) || derived?.town || null,
+    area: (metadata.area as string | null) || derived?.area || null,
+    working_place: place,
+    working_place_updated_at: place ? new Date().toISOString() : null,
+    status: "pending" as const,
+    created_at: new Date().toISOString(),
+  };
+}
 
 export default function VerifyEmailScreen() {
   const router = useRouter();
@@ -34,17 +54,8 @@ export default function VerifyEmailScreen() {
   const [isVerifying, setIsVerifying] = useState(false);
   const [isResending, setIsResending] = useState(false);
 
-  const [fontsLoaded] = useFonts({
-    Poppins_600SemiBold,
-    Poppins_700Bold,
-    Inter_400Regular,
-    Inter_500Medium,
-  });
-
   // Initialize OTP refs and auto-focus first input
   useEffect(() => {
-    if (!fontsLoaded) return;
-
     // Initialize refs array if not already done
     if (otpRefs.current.length === 0) {
       otpRefs.current = Array(6).fill(null);
@@ -55,12 +66,10 @@ export default function VerifyEmailScreen() {
       setFocusedIndex(0);
       otpRefs.current[0]?.focus();
     }, 300);
-  }, [fontsLoaded]);
+  }, []);
 
   // Get email from params or AsyncStorage
   useEffect(() => {
-    if (!fontsLoaded) return;
-
     const getEmailFromStorage = async () => {
       if (!email || email === "") {
         try {
@@ -93,7 +102,7 @@ export default function VerifyEmailScreen() {
     };
 
     getEmailFromStorage();
-  }, [fontsLoaded, email]);
+  }, [email]);
 
   // Handle OTP input change
   const handleOtpChange = (value: string, index: number) => {
@@ -214,17 +223,11 @@ export default function VerifyEmailScreen() {
         const { error: profileError } = await supabase
           .from("agents")
           .insert([
-            {
-              id: data.user.id,
-              email: data.user.email || email,
-              name: metadata.name || "",
-              airtel_phone: metadata.airtel_phone || null,
-              safaricom_phone: metadata.safaricom_phone || null,
-              town: metadata.town || null,
-              area: metadata.area || null,
-              status: "pending",
-              created_at: new Date().toISOString(),
-            },
+            agentProfileFromMetadata(
+              data.user.id,
+              data.user.email || email,
+              metadata,
+            ),
           ])
           .select();
 
@@ -263,17 +266,11 @@ export default function VerifyEmailScreen() {
         const { error: profileError } = await supabase
           .from("agents")
           .insert([
-            {
-              id: userData.user.id,
-              email: userData.user.email || email,
-              name: metadata.name || "",
-              airtel_phone: metadata.airtel_phone || null,
-              safaricom_phone: metadata.safaricom_phone || null,
-              town: metadata.town || null,
-              area: metadata.area || null,
-              status: "pending",
-              created_at: new Date().toISOString(),
-            },
+            agentProfileFromMetadata(
+              userData.user.id,
+              userData.user.email || email,
+              metadata,
+            ),
           ])
           .select();
 
@@ -432,10 +429,6 @@ export default function VerifyEmailScreen() {
       setIsResending(false);
     }
   };
-
-  if (!fontsLoaded) {
-    return null;
-  }
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>

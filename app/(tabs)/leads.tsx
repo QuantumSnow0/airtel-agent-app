@@ -10,23 +10,15 @@ import {
 } from "react-native";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useFonts } from "expo-font";
 import { MaterialIcons } from "@expo/vector-icons";
-import {
-  Poppins_600SemiBold,
-  Poppins_700Bold,
-} from "@expo-google-fonts/poppins";
-import {
-  Inter_400Regular,
-  Inter_500Medium,
-  Inter_600SemiBold,
-} from "@expo-google-fonts/inter";
 import { supabase } from "../../lib/supabase";
 import {
   fetchActiveOffers,
   fetchAssignedLeads,
   fetchDeferredReminders,
+  fetchDispatchConfig,
 } from "../../lib/services/leadDispatchService";
+import { fetchSubmittedLeads } from "../../lib/services/submitAirtelLeadService";
 import type { InboundLead, LeadOffer, LeadOfferPreview } from "../../lib/dispatch/types";
 import { LeadOfferModal } from "../../components/LeadOfferModal";
 import {
@@ -38,7 +30,9 @@ import {
   LEAD_STATUS_COLORS,
   formatLeadStatusLabel,
 } from "../../constants/leadStatuses";
-import { LEAD_INSTALL_COMMISSION_KES } from "../../lib/commissions/leadInstallCommission";
+import {
+  resolveLeadInstallDisplayKes,
+} from "../../lib/commissions/leadInstallCommission";
 import {
   scaleFont,
   scaleHeight,
@@ -102,10 +96,15 @@ export default function LeadsScreen() {
   const [offers, setOffers] = useState<LeadOffer[]>([]);
   const [leads, setLeads] = useState<InboundLead[]>([]);
   const [reminders, setReminders] = useState<InboundLead[]>([]);
+  const [submittedLeads, setSubmittedLeads] = useState<InboundLead[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [modalOffer, setModalOffer] = useState<LeadOffer | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
+  const [receiverFees, setReceiverFees] = useState({
+    standard: 0,
+    premium: 0,
+  });
 
   const openOfferModal = useCallback((offer: LeadOffer) => {
     setModalOffer(offer);
@@ -124,14 +123,6 @@ export default function LeadsScreen() {
     setModalOffer(null);
   }, []);
 
-  const [fontsLoaded] = useFonts({
-    Poppins_600SemiBold,
-    Poppins_700Bold,
-    Inter_400Regular,
-    Inter_500Medium,
-    Inter_600SemiBold,
-  });
-
   const loadData = useCallback(async () => {
     const {
       data: { user },
@@ -140,14 +131,19 @@ export default function LeadsScreen() {
       router.replace("/login" as any);
       return;
     }
-    const [offersRes, leadsRes, remindersRes] = await Promise.all([
-      fetchActiveOffers(user.id),
-      fetchAssignedLeads(user.id),
-      fetchDeferredReminders(user.id),
-    ]);
+    const [offersRes, leadsRes, remindersRes, submittedRes, cfg] =
+      await Promise.all([
+        fetchActiveOffers(user.id),
+        fetchAssignedLeads(user.id),
+        fetchDeferredReminders(user.id),
+        fetchSubmittedLeads(user.id),
+        fetchDispatchConfig(),
+      ]);
     setOffers(offersRes.offers);
     setLeads(leadsRes.leads);
     setReminders(remindersRes.leads);
+    setSubmittedLeads(submittedRes.leads);
+    setReceiverFees(cfg.receiverFees);
 
     if (openOffer) {
       const match = offersRes.offers.find((o) => o.id === openOffer);
@@ -197,6 +193,18 @@ export default function LeadsScreen() {
           {
             event: "*",
             schema: "public",
+            table: "inbound_leads",
+            filter: `submitted_by_agent_id=eq.${user.id}`,
+          },
+          () => {
+            void loadData();
+          },
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
             table: "lead_offers",
             filter: `agent_id=eq.${user.id}`,
           },
@@ -218,8 +226,6 @@ export default function LeadsScreen() {
     await loadData();
     setRefreshing(false);
   };
-
-  if (!fontsLoaded) return null;
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -316,6 +322,48 @@ export default function LeadsScreen() {
             )}
 
             <View style={[styles.sectionHead, { marginTop: scaleHeight(24) }]}>
+              <MaterialIcons name="campaign" size={scaleWidth(20)} color="#2563EB" />
+              <Text style={styles.sectionTitle}>Submitted by me</Text>
+            </View>
+            {submittedLeads.length === 0 ? (
+              <View style={styles.emptyCard}>
+                <MaterialIcons name="campaign" size={scaleWidth(36)} color="#CCCCCC" />
+                <Text style={styles.emptyTitle}>No submitted leads</Text>
+                <Text style={styles.emptyText}>
+                  Submit Airtel interest from the Airtel registration screen.
+                  Status updates appear here.
+                </Text>
+              </View>
+            ) : (
+              submittedLeads.map((lead) => {
+                const st =
+                  LEAD_STATUS_COLORS[lead.status] ?? LEAD_STATUS_COLORS.assigned;
+                return (
+                  <View key={lead.id} style={styles.leadCard}>
+                    <View
+                      style={[styles.leadBrandDot, { backgroundColor: "#2563EB" }]}
+                    />
+                    <View style={styles.leadCardBody}>
+                      <View style={styles.leadCardTop}>
+                        <Text style={styles.leadName}>{lead.customer_name}</Text>
+                        <View style={[styles.chip, { backgroundColor: st.bg }]}>
+                          <Text style={[styles.chipText, { color: st.text }]}>
+                            {formatLeadStatusLabel(lead.status)}
+                          </Text>
+                        </View>
+                      </View>
+                      <Text style={styles.leadMeta} numberOfLines={1}>
+                        {[lead.installation_town, lead.preferred_package]
+                          .filter(Boolean)
+                          .join(" · ") || "Airtel lead"}
+                      </Text>
+                    </View>
+                  </View>
+                );
+              })
+            )}
+
+            <View style={[styles.sectionHead, { marginTop: scaleHeight(24) }]}>
               <MaterialIcons name="assignment" size={scaleWidth(20)} color="#0066CC" />
               <Text style={styles.sectionTitle}>My assigned leads</Text>
             </View>
@@ -363,11 +411,20 @@ export default function LeadsScreen() {
                       </View>
                       <Text style={styles.leadMeta}>
                         {isSaf ? "Safaricom" : "Airtel"} · {lead.installation_town}
-                        {lead.status === "installed"
-                          ? ` · KSh ${LEAD_INSTALL_COMMISSION_KES}`
-                          : lead.status === "pending_install"
-                            ? " · Pending review"
-                            : ""}
+                        {(() => {
+                          if (lead.status === "pending_install") {
+                            return " · Pending review";
+                          }
+                          if (lead.status !== "installed") return "";
+                          const earn = resolveLeadInstallDisplayKes({
+                            source: lead.source,
+                            submitted_by_agent_id: lead.submitted_by_agent_id,
+                            preferredPackage:
+                              lead.plan_label ?? lead.preferred_package,
+                            receiverFees,
+                          });
+                          return earn != null ? ` · KSh ${earn}` : "";
+                        })()}
                       </Text>
                     </View>
                     <MaterialIcons name="chevron-right" size={scaleWidth(22)} color="#999" />

@@ -41,6 +41,8 @@ export type RegistrationDetail = {
   commission_units?: number | null;
   ms_forms_response_id?: string | null;
   ms_forms_submitted_at?: string | null;
+  airtel_connect_entry?: "wam_first" | "connect_first" | null;
+  airtel_connect_order_id?: string | null;
   service_package?: string;
   syncStatus?: "synced" | "pending" | "not_synced";
   estimated_commission_ksh?: number;
@@ -175,7 +177,7 @@ export async function fetchRegistrationDetail(
     const { data, error } = await supabase
       .from("customer_registrations")
       .select(
-        "id, customer_name, email, airtel_number, alternate_number, preferred_package, units_required, commission_package, commission_units, installation_town, installation_location, delivery_landmark, visit_date, visit_time, status, created_at, updated_at, ms_forms_response_id, ms_forms_submitted_at"
+        "id, customer_name, email, airtel_number, alternate_number, preferred_package, units_required, commission_package, commission_units, installation_town, installation_location, delivery_landmark, visit_date, visit_time, status, created_at, updated_at, ms_forms_response_id, ms_forms_submitted_at, airtel_connect_entry, airtel_connect_order_id"
       )
       .eq("id", registrationId)
       .eq("agent_id", agentId)
@@ -206,6 +208,11 @@ export async function fetchRegistrationDetail(
         commission_units: data.commission_units,
         ms_forms_response_id: data.ms_forms_response_id,
         ms_forms_submitted_at: data.ms_forms_submitted_at,
+        airtel_connect_entry: (data.airtel_connect_entry as
+          | "wam_first"
+          | "connect_first"
+          | null) ?? null,
+        airtel_connect_order_id: data.airtel_connect_order_id ?? null,
         syncStatus: "synced",
         estimated_commission_ksh: computeAirtelCommission(data),
         timeline: buildTimeline(data.status, data.created_at, data.updated_at),

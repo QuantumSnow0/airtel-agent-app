@@ -18,16 +18,6 @@ import {
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useFonts } from "expo-font";
-import {
-  Poppins_600SemiBold,
-  Poppins_700Bold,
-} from "@expo-google-fonts/poppins";
-import {
-  Inter_400Regular,
-  Inter_500Medium,
-  Inter_600SemiBold,
-} from "@expo-google-fonts/inter";
 import { supabase } from "../../lib/supabase";
 import { fetchInboundLeadById } from "../../lib/dispatch/leadDetailService";
 import type {
@@ -43,14 +33,22 @@ import {
   submitLeadOutcome,
 } from "../../lib/services/leadOutcomeService";
 import {
-  LEAD_INSTALL_COMMISSION_KES,
   getLeadInstallCommissionKes,
+  resolveLeadInstallDisplayKes,
 } from "../../lib/commissions/leadInstallCommission";
+import { fetchDispatchConfig } from "../../lib/services/leadDispatchService";
 import {
   scaleFont,
   scaleHeight,
   scaleWidth,
 } from "../../lib/utils/responsive";
+import { PlaceMapPreview } from "../../components/PlaceMapPreview";
+import { getCachedAgentData } from "../../lib/cache/agentCache";
+import {
+  formatDistanceFromYou,
+  parseGooglePlace,
+  pinDistanceKm,
+} from "../../lib/google-places/parseGooglePlace";
 
 function toDateInputValue(d: Date): string {
   const y = d.getFullYear();
@@ -131,15 +129,11 @@ export default function InboundLeadDetailScreen() {
   });
   const [showDatePicker, setShowDatePicker] = useState(Platform.OS === "ios");
   const [deferNotes, setDeferNotes] = useState("");
+  const [agentWorkingPlace, setAgentWorkingPlace] = useState<unknown>(null);
+  const [installDisplayKes, setInstallDisplayKes] = useState<number | null>(
+    null,
+  );
   const scrollRef = useRef<ScrollView>(null);
-
-  const [fontsLoaded] = useFonts({
-    Poppins_600SemiBold,
-    Poppins_700Bold,
-    Inter_400Regular,
-    Inter_500Medium,
-    Inter_600SemiBold,
-  });
 
   const applyLead = useCallback((next: InboundLead) => {
     setError(null);
@@ -158,18 +152,37 @@ export default function InboundLeadDetailScreen() {
       router.replace("/login" as any);
       return;
     }
-    const result = await fetchInboundLeadById(id);
+    const [result, cfg] = await Promise.all([
+      fetchInboundLeadById(id),
+      fetchDispatchConfig(),
+    ]);
     if (result.error || !result.lead) {
       setError(result.error ?? "Lead not found");
       setLead(null);
+      setInstallDisplayKes(null);
     } else {
       applyLead(result.lead);
+      setInstallDisplayKes(
+        resolveLeadInstallDisplayKes({
+          source: result.lead.source,
+          submitted_by_agent_id: result.lead.submitted_by_agent_id,
+          preferredPackage:
+            result.lead.plan_label ?? result.lead.preferred_package,
+          receiverFees: cfg.receiverFees,
+        }),
+      );
     }
   }, [applyLead, id, router]);
 
   useEffect(() => {
     loadLead().finally(() => setLoading(false));
   }, [loadLead]);
+
+  useEffect(() => {
+    void getCachedAgentData().then((cached) => {
+      if (cached?.working_place) setAgentWorkingPlace(cached.working_place);
+    });
+  }, []);
 
   // Live status / field updates while this screen is open.
   useEffect(() => {
@@ -237,11 +250,23 @@ export default function InboundLeadDetailScreen() {
       setReleaseOpen(false);
       setReleaseReason(null);
       setReleaseNotes("");
-      // Do not re-fetch: release clears assigned_agent_id so RLS returns "not found".
       const reasonText = releaseReasonLabel(result.releaseReason ?? action);
-      Alert.alert("Lead released", reasonText, [
-        { text: "OK", onPress: () => router.back() },
-      ]);
+      if (result.reassigned) {
+        Alert.alert("Lead released", reasonText, [
+          { text: "OK", onPress: () => router.back() },
+        ]);
+        return;
+      }
+      setLead((prev) =>
+        prev
+          ? {
+              ...prev,
+              kyc_outcome: (result.releaseReason ??
+                action) as InboundLead["kyc_outcome"],
+            }
+          : prev,
+      );
+      Alert.alert("Lead released", reasonText);
       return;
     }
 
@@ -360,8 +385,6 @@ export default function InboundLeadDetailScreen() {
     void runOutcome("installed", { safaricomImei: deviceImei });
   };
 
-  if (!fontsLoaded) return null;
-
   const statusStyle =
     LEAD_STATUS_COLORS[lead?.status ?? "assigned"] ??
     LEAD_STATUS_COLORS.assigned;
@@ -456,10 +479,43 @@ export default function InboundLeadDetailScreen() {
 
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Location</Text>
-              <DetailRow label="County" value={lead.county} />
-              <DetailRow label="Town" value={lead.installation_town} />
-              <DetailRow label="Area" value={lead.installation_area} />
-              <DetailRow label="Landmark" value={lead.delivery_landmark} />
+              {(() => {
+                const customerPlace = parseGooglePlace(
+                  lead.metadata?.googlePlace,
+                );
+                const pinKm = pinDistanceKm(
+                  customerPlace,
+                  agentWorkingPlace,
+                );
+                return (
+                  <>
+                    {customerPlace ? (
+                      <View style={{ marginBottom: 12 }}>
+                        <PlaceMapPreview
+                          lat={customerPlace.lat}
+                          lng={customerPlace.lng}
+                          label={customerPlace.name}
+                        />
+                      </View>
+                    ) : null}
+                    <DetailRow
+                      label="Landmark"
+                      value={
+                        customerPlace?.name ?? lead.delivery_landmark
+                      }
+                    />
+                    {pinKm != null ? (
+                      <DetailRow
+                        label="Distance"
+                        value={formatDistanceFromYou(pinKm)}
+                      />
+                    ) : null}
+                    <DetailRow label="County" value={lead.county} />
+                    <DetailRow label="Town" value={lead.installation_town} />
+                    <DetailRow label="Area" value={lead.installation_area} />
+                  </>
+                );
+              })()}
             </View>
 
             <View style={styles.section}>
@@ -620,9 +676,10 @@ export default function InboundLeadDetailScreen() {
                 <DetailRow label="SR number" value={lead.airtel_sr_number} />
                 <DetailRow label="IMEI" value={lead.safaricom_imei} />
                 <Text style={styles.awaitingText}>
-                  Waiting for admin to confirm. If approved, KSh{" "}
-                  {LEAD_INSTALL_COMMISSION_KES} will be added to your earnings
-                  and paid with your normal payouts.
+                  Waiting for admin to confirm installation
+                  {installDisplayKes != null
+                    ? `. If approved, KSh ${installDisplayKes.toLocaleString()} will be added to your earnings and paid with your normal payouts.`
+                    : "."}
                 </Text>
               </View>
             )}
@@ -632,10 +689,17 @@ export default function InboundLeadDetailScreen() {
                 <Text style={styles.sectionTitle}>Install confirmed</Text>
                 <DetailRow label="SR number" value={lead.airtel_sr_number} />
                 <DetailRow label="IMEI" value={lead.safaricom_imei} />
-                <DetailRow
-                  label="Commission"
-                  value={`KSh ${getLeadInstallCommissionKes(lead).toLocaleString()} (via admin payouts)`}
-                />
+                {getLeadInstallCommissionKes(lead) > 0 ||
+                installDisplayKes != null ? (
+                  <DetailRow
+                    label="Commission"
+                    value={`KSh ${(
+                      getLeadInstallCommissionKes(lead) ||
+                      installDisplayKes ||
+                      0
+                    ).toLocaleString()} (via admin payouts)`}
+                  />
+                ) : null}
                 <DetailRow
                   label="Installed at"
                   value={

@@ -10,16 +10,6 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useFonts } from "expo-font";
-import {
-  Poppins_600SemiBold,
-  Poppins_700Bold,
-} from "@expo-google-fonts/poppins";
-import {
-  Inter_400Regular,
-  Inter_500Medium,
-  Inter_600SemiBold,
-} from "@expo-google-fonts/inter";
 import { supabase } from "../lib/supabase";
 import {
   fetchAgentPaymentHistory,
@@ -40,14 +30,6 @@ export default function EarningsHistoryScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const [fontsLoaded] = useFonts({
-    Poppins_600SemiBold,
-    Poppins_700Bold,
-    Inter_400Regular,
-    Inter_500Medium,
-    Inter_600SemiBold,
-  });
 
   const loadData = useCallback(async () => {
     const {
@@ -84,8 +66,6 @@ export default function EarningsHistoryScreen() {
 
   const totalPaidKsh = payments.reduce((sum, p) => sum + p.amount_ksh, 0);
   const balanceKsh = Math.max(0, totalEarnedKsh - totalPaidKsh);
-
-  if (!fontsLoaded) return null;
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>

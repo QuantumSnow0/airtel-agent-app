@@ -10,16 +10,6 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, usePathname } from "expo-router";
-import { useFonts } from "expo-font";
-import {
-  Poppins_600SemiBold,
-  Poppins_700Bold,
-} from "@expo-google-fonts/poppins";
-import {
-  Inter_400Regular,
-  Inter_500Medium,
-  Inter_600SemiBold,
-} from "@expo-google-fonts/inter";
 import { openAppStore, getCurrentAppVersion, checkAppVersion } from "../lib/services/appVersionService";
 import {
   getCardPadding,
@@ -35,14 +25,6 @@ export default function UpdateRequiredScreen() {
   const insets = useSafeAreaInsets();
   const { version } = getCurrentAppVersion();
   const versionCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
-
-  const [fontsLoaded] = useFonts({
-    Poppins_600SemiBold,
-    Poppins_700Bold,
-    Inter_400Regular,
-    Inter_500Medium,
-    Inter_600SemiBold,
-  });
 
   // Prevent back button on Android
   useEffect(() => {
@@ -95,10 +77,6 @@ export default function UpdateRequiredScreen() {
   const handleUpdate = async () => {
     await openAppStore();
   };
-
-  if (!fontsLoaded) {
-    return null;
-  }
 
   const styles = createStyles(insets);
 

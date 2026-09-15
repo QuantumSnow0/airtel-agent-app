@@ -1,13 +1,3 @@
-import {
-    Inter_400Regular,
-    Inter_500Medium,
-    Inter_600SemiBold,
-} from "@expo-google-fonts/inter";
-import {
-    Poppins_600SemiBold,
-    Poppins_700Bold,
-} from "@expo-google-fonts/poppins";
-import { useFonts } from "expo-font";
 import { useFocusEffect } from "@react-navigation/native";
 import { useRouter, useSegments } from "expo-router";
 import * as Haptics from "expo-haptics";
@@ -16,6 +6,7 @@ import {
     ActivityIndicator,
     Alert,
     Animated,
+    InteractionManager,
     Platform,
     RefreshControl,
     ScrollView,
@@ -34,6 +25,7 @@ import { HomeActivities } from "../../components/HomeActivities";
 import { HomeLeadOfferBanner } from "../../components/HomeLeadOfferBanner";
 import { HomeActionSpotlight } from "../../components/HomeActionSpotlight";
 import { HomeDashboardSkeleton } from "../../components/HomeDashboardSkeleton";
+import { WorkingLocationRow } from "../../components/WorkingLocationRow";
 import { AppRatingPrompt } from "../../components/AppRatingPrompt";
 import { NotificationEnablePrompt } from "../../components/NotificationEnablePrompt";
 import { Toast } from "../../components/Toast";
@@ -70,6 +62,7 @@ import {
     clearDashboardDataCache,
     getCachedDashboardData,
     saveDashboardDataToCache,
+    type CachedDashboardData,
 } from "../../lib/cache/dashboardCache";
 import { clearNotificationsCache } from "../../lib/cache/notificationsCache";
 import { clearRegistrationsCache } from "../../lib/cache/registrationsCache";
@@ -130,11 +123,45 @@ const getInitial = (name?: string, email?: string): string => {
   return "?";
 };
 
+function applyCachedDashboard(
+  cached: CachedDashboardData,
+  setters: {
+    setAgentData: (v: CachedAgentData | null) => void;
+    setBalance: (v: number) => void;
+    setTotalRegistered: (v: number) => void;
+    setTotalInstalled: (v: number) => void;
+    setPremiumRegistered: (v: number) => void;
+    setStandardRegistered: (v: number) => void;
+    setPremiumInstalled: (v: number) => void;
+    setStandardInstalled: (v: number) => void;
+    setSafaricomRegistered: (v: number) => void;
+    setSafaricomInstalled: (v: number) => void;
+    setSafaricomInstalledCommissionKsh: (v: number) => void;
+    setRecentRegistrations: (v: any[]) => void;
+  }
+) {
+  setters.setAgentData(cached.agentData);
+  setters.setBalance(cached.balance);
+  setters.setTotalRegistered(cached.totalRegistered);
+  setters.setTotalInstalled(cached.totalInstalled);
+  setters.setPremiumRegistered(cached.premiumRegistered ?? 0);
+  setters.setStandardRegistered(cached.standardRegistered ?? 0);
+  setters.setPremiumInstalled(cached.premiumInstalled ?? 0);
+  setters.setStandardInstalled(cached.standardInstalled ?? 0);
+  setters.setSafaricomRegistered(cached.safaricomRegistered ?? 0);
+  setters.setSafaricomInstalled(cached.safaricomInstalled ?? 0);
+  setters.setSafaricomInstalledCommissionKsh(
+    cached.safaricomInstalledCommissionKsh ?? 0
+  );
+  setters.setRecentRegistrations(cached.recentRegistrations);
+}
+
 export default function DashboardScreen() {
   const router = useRouter();
   const segments = useSegments();
   const insets = useSafeAreaInsets();
   const [isLoading, setIsLoading] = useState(true);
+  const [homeLoadFinished, setHomeLoadFinished] = useState(false);
   const [user, setUser] = useState<any>(null);
   const [agentData, setAgentData] = useState<CachedAgentData | null>(null);
   const [greeting, setGreeting] = useState("Good morning,");
@@ -306,33 +333,10 @@ export default function DashboardScreen() {
       setHomeRefreshKey((k) => k + 1);
       if (agentData?.status === "approved") {
         void evaluateDashboardPrompts(agentData.status);
-        void (async () => {
-          const agentId = agentData?.id ?? user?.id;
-          if (!agentId) return;
-          const [avail, offersRes, permission] = await Promise.all([
-            fetchDispatchAvailability(agentId),
-            fetchActiveOffers(agentId),
-            getNotificationPermissionState(),
-          ]);
-          setCanReceiveLeads(avail.canReceiveLeads);
-          setActiveOfferCount(offersRes.offers.length);
-
-          // Receive leads requires push permission — auto-pause if revoked.
-          if (avail.isAvailable && permission !== "granted") {
-            setLeadsAvailable(false);
-            const paused = await setDispatchAvailability(agentId, false);
-            if (paused.success) {
-              setToastTitle("Leads paused");
-              setToastMessage(
-                "Turn on WAM notifications to receive leads again.",
-              );
-              setToastType("info");
-              setToastVisible(true);
-            }
-          } else {
-            setLeadsAvailable(avail.isAvailable);
-          }
-        })();
+        const agentId = agentData?.id ?? user?.id;
+        if (agentId) {
+          void refreshLeadAvailability(agentId);
+        }
       } else {
         setCanReceiveLeads(false);
         setLeadsAvailable(false);
@@ -366,26 +370,16 @@ export default function DashboardScreen() {
     await applyLeadsAvailability(next);
   };
 
-  const [fontsLoaded] = useFonts({
-    Poppins_600SemiBold,
-    Poppins_700Bold,
-    Inter_400Regular,
-    Inter_500Medium,
-    Inter_600SemiBold,
-  });
-
   useEffect(() => {
     setGreeting(getTimeBasedGreeting());
     initOfflineStorage();
     loadUserData();
-    
-    // Also load notification count on mount
+
     const loadInitialNotificationCount = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         await loadUnreadNotificationCount(user.id);
-        
-        // Register device token for push notifications
+
         const { requestNotificationPermissions, getDeviceToken, registerDeviceToken } = await import("../../lib/services/pushNotificationService");
         const hasPermission = await requestNotificationPermissions();
         if (hasPermission) {
@@ -396,7 +390,9 @@ export default function DashboardScreen() {
         }
       }
     };
-    loadInitialNotificationCount();
+    const interaction = InteractionManager.runAfterInteractions(() => {
+      void loadInitialNotificationCount();
+    });
 
     // Listen for auth state changes (logout, etc.)
     // Note: Navigation is handled by _layout.tsx to prevent duplicate navigations
@@ -414,6 +410,7 @@ export default function DashboardScreen() {
     );
 
     return () => {
+      interaction.cancel();
       authListener.subscription.unsubscribe();
     };
   }, []);
@@ -671,43 +668,88 @@ export default function DashboardScreen() {
     return () => clearInterval(interval);
   }, [user?.id]);
 
-  const loadUserData = async () => {
-    setIsLoading(true);
-    let agentStatusForPrompt: string | null = null;
-    try {
-      // Check if online (with timeout to prevent hanging)
-      // Use Promise.race to ensure it doesn't hang when offline
-      const onlinePromise = isOnline();
-      const timeoutPromise = new Promise<boolean>((resolve) => {
-        setTimeout(() => resolve(false), 3000); // 3 second max for initial check
-      });
-      const online = await Promise.race([onlinePromise, timeoutPromise]);
-      setIsOffline(!online);
+  const hydrateFromCache = (cached: CachedDashboardData) => {
+    applyCachedDashboard(cached, {
+      setAgentData,
+      setBalance,
+      setTotalRegistered,
+      setTotalInstalled,
+      setPremiumRegistered,
+      setStandardRegistered,
+      setPremiumInstalled,
+      setStandardInstalled,
+      setSafaricomRegistered,
+      setSafaricomInstalled,
+      setSafaricomInstalledCommissionKsh,
+      setRecentRegistrations,
+    });
+  };
 
-      // Get current user - use getSession() which works offline
-      // Add retry logic for session restoration after force close
-      let session = null;
-      let retries = 0;
-      const maxRetries = 3;
-      
-      while (retries < maxRetries && !session) {
-        const sessionResult = await supabase.auth.getSession();
-        session = sessionResult.data?.session;
-        
-        if (!session && retries < maxRetries - 1) {
-          // Wait a bit before retrying (session might still be restoring)
-          await new Promise(resolve => setTimeout(resolve, 200));
-          retries++;
-        } else {
-          break;
+  const refreshLeadAvailability = async (agentId: string) => {
+    try {
+      const [avail, offersRes, permission] = await Promise.all([
+        fetchDispatchAvailability(agentId),
+        fetchActiveOffers(agentId),
+        getNotificationPermissionState(),
+      ]);
+      setCanReceiveLeads(avail.canReceiveLeads);
+      setActiveOfferCount(offersRes.offers.length);
+
+      if (avail.isAvailable && permission !== "granted") {
+        setLeadsAvailable(false);
+        const paused = await setDispatchAvailability(agentId, false);
+        if (paused.success) {
+          setToastTitle("Leads paused");
+          setToastMessage(
+            "Turn on WAM notifications to receive leads again.",
+          );
+          setToastType("info");
+          setToastVisible(true);
+        }
+      } else {
+        setLeadsAvailable(avail.isAvailable);
+      }
+    } catch (error) {
+      console.error("Error loading lead availability:", error);
+    }
+  };
+
+  const loadUserData = async () => {
+    let agentStatusForPrompt: string | null = null;
+    let resolvedAgent: CachedAgentData | null = null;
+    try {
+      const cachedDashboardData = await getCachedDashboardData();
+      if (cachedDashboardData) {
+        hydrateFromCache(cachedDashboardData);
+        resolvedAgent = cachedDashboardData.agentData ?? null;
+        agentStatusForPrompt = resolvedAgent?.status ?? null;
+      } else {
+        // Warm agent ASAP so approved home tiles aren't gated on network.
+        const cachedAgentData = await getCachedAgentData();
+        if (cachedAgentData) {
+          resolvedAgent = cachedAgentData;
+          setAgentData(cachedAgentData);
+          agentStatusForPrompt = cachedAgentData.status ?? null;
         }
       }
-      
+
+      // Resolve session first. Do NOT race isOnline against this — session
+      // refresh can take longer than a short timeout and falsely mark offline,
+      // which skips the agent fetch and hides carousel + register buttons.
+      const sessionResult = await supabase.auth.getSession();
+      let session = sessionResult.data?.session;
       let currentUser = session?.user;
 
       if (!currentUser) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        const retryResult = await supabase.auth.getSession();
+        session = retryResult.data?.session;
+        currentUser = session?.user;
+      }
+
+      if (!currentUser) {
         // No user session after retries - check if we have cached data first
-        const cachedAgentData = await getCachedAgentData();
+        const cachedAgentData = resolvedAgent ?? (await getCachedAgentData());
         if (cachedAgentData) {
           // We have cached data but no session - might be a temporary issue
           // Try to refresh the session one more time
@@ -734,6 +776,11 @@ export default function DashboardScreen() {
               // Network error - continue with cached data (offline mode)
               // We'll use a minimal user object from cache
               currentUser = { id: cachedAgentData.id, email: cachedAgentData.email } as any;
+              if (!resolvedAgent) {
+                resolvedAgent = cachedAgentData;
+                setAgentData(cachedAgentData);
+                agentStatusForPrompt = cachedAgentData.status ?? null;
+              }
             } else {
               // No session and refresh returned nothing - clear cache and redirect
               await clearAgentDataCache();
@@ -749,6 +796,11 @@ export default function DashboardScreen() {
                 refreshError.message?.includes("Failed to fetch")) {
               // Network error - continue with cached data
               currentUser = { id: cachedAgentData.id, email: cachedAgentData.email } as any;
+              if (!resolvedAgent) {
+                resolvedAgent = cachedAgentData;
+                setAgentData(cachedAgentData);
+                agentStatusForPrompt = cachedAgentData.status ?? null;
+              }
             } else {
               // Auth error - clear cache and redirect to login
               await clearAgentDataCache();
@@ -785,61 +837,23 @@ export default function DashboardScreen() {
       setUser(currentUser);
 
       if (!currentUser) {
-        setIsLoading(false);
         return;
       }
 
-      // If offline, load from cache
+      const online = await isOnline();
+      setIsOffline(!online);
+
       if (!online) {
         console.log("📴 Offline - loading from cache");
-        const cachedDashboardData = await getCachedDashboardData();
-        if (cachedDashboardData) {
-          setAgentData(cachedDashboardData.agentData);
-          setBalance(cachedDashboardData.balance);
-          setTotalRegistered(cachedDashboardData.totalRegistered);
-          setTotalInstalled(cachedDashboardData.totalInstalled);
-          setPremiumRegistered(cachedDashboardData.premiumRegistered ?? 0);
-          setStandardRegistered(cachedDashboardData.standardRegistered ?? 0);
-          setPremiumInstalled(cachedDashboardData.premiumInstalled ?? 0);
-          setStandardInstalled(cachedDashboardData.standardInstalled ?? 0);
-          setSafaricomRegistered(cachedDashboardData.safaricomRegistered ?? 0);
-          setSafaricomInstalled(cachedDashboardData.safaricomInstalled ?? 0);
-          setSafaricomInstalledCommissionKsh(
-            cachedDashboardData.safaricomInstalledCommissionKsh ?? 0
-          );
-          setRecentRegistrations(cachedDashboardData.recentRegistrations);
-          setIsLoading(false);
-          return;
-        } else {
-          // No cache available - try to load agent cache at least
+        if (!resolvedAgent) {
           const cachedAgentData = await getCachedAgentData();
           if (cachedAgentData) {
+            resolvedAgent = cachedAgentData;
             setAgentData(cachedAgentData);
+            agentStatusForPrompt = cachedAgentData.status ?? null;
           }
-          // Always set loading to false, even if no cache (prevents infinite loading)
-          setIsLoading(false);
-          return;
         }
-      }
-
-      // Online - Try to load cached data first (for fast initial display)
-      const cachedDashboardData = await getCachedDashboardData();
-      if (cachedDashboardData) {
-        setAgentData(cachedDashboardData.agentData);
-        setBalance(cachedDashboardData.balance);
-        setTotalRegistered(cachedDashboardData.totalRegistered);
-        setTotalInstalled(cachedDashboardData.totalInstalled);
-        setPremiumRegistered(cachedDashboardData.premiumRegistered ?? 0);
-        setStandardRegistered(cachedDashboardData.standardRegistered ?? 0);
-        setPremiumInstalled(cachedDashboardData.premiumInstalled ?? 0);
-        setStandardInstalled(cachedDashboardData.standardInstalled ?? 0);
-        setSafaricomRegistered(cachedDashboardData.safaricomRegistered ?? 0);
-        setSafaricomInstalled(cachedDashboardData.safaricomInstalled ?? 0);
-        setSafaricomInstalledCommissionKsh(
-          cachedDashboardData.safaricomInstalledCommissionKsh ?? 0
-        );
-        setRecentRegistrations(cachedDashboardData.recentRegistrations);
-        setIsLoading(false); // Show cached data immediately
+        return;
       }
 
       // Fetch fresh agent data from database (background fetch)
@@ -852,16 +866,26 @@ export default function DashboardScreen() {
 
       if (agentError) {
         console.error("Error loading agent data:", agentError);
-        // If we have cached data, keep using it
-        if (!cachedDashboardData) {
-          await clearAgentDataCache();
-          setAgentData(null);
+        // Prefer any cached agent so home tiles still render
+        if (!resolvedAgent) {
+          const cachedAgentData = await getCachedAgentData();
+          if (cachedAgentData) {
+            resolvedAgent = cachedAgentData;
+            setAgentData(cachedAgentData);
+            agentStatusForPrompt = cachedAgentData.status ?? null;
+          } else {
+            setAgentData(null);
+          }
         }
       } else {
         // Save fresh data to cache
         await saveAgentDataToCache(agent);
+        resolvedAgent = agent;
         setAgentData(agent);
         agentStatusForPrompt = agent.status;
+        if (agent.status === "approved") {
+          await refreshLeadAvailability(agent.id);
+        }
         // Wallet KSh is set in loadCustomerData (Airtel + Safaricom installed commissions)
       }
 
@@ -876,9 +900,9 @@ export default function DashboardScreen() {
         await loadUnreadNotificationCount(currentUser.id);
         
         // Save complete dashboard data to cache after all data is loaded
-        if (agentData) {
+        if (resolvedAgent) {
           await saveDashboardDataToCache({
-            agentData,
+            agentData: resolvedAgent,
             balance: balance ?? 0,
             totalRegistered: totalRegistered ?? 0,
             totalInstalled: totalInstalled ?? 0,
@@ -891,29 +915,32 @@ export default function DashboardScreen() {
       // If offline or error, try to load from cache
       const cachedDashboardData = await getCachedDashboardData();
       if (cachedDashboardData) {
-        setAgentData(cachedDashboardData.agentData);
+        hydrateFromCache(cachedDashboardData);
+        resolvedAgent = cachedDashboardData.agentData ?? null;
         agentStatusForPrompt = cachedDashboardData.agentData?.status ?? null;
-        setBalance(cachedDashboardData.balance);
-        setTotalRegistered(cachedDashboardData.totalRegistered);
-        setTotalInstalled(cachedDashboardData.totalInstalled);
-        setPremiumRegistered(cachedDashboardData.premiumRegistered ?? 0);
-        setStandardRegistered(cachedDashboardData.standardRegistered ?? 0);
-        setPremiumInstalled(cachedDashboardData.premiumInstalled ?? 0);
-        setStandardInstalled(cachedDashboardData.standardInstalled ?? 0);
-        setSafaricomRegistered(cachedDashboardData.safaricomRegistered ?? 0);
-        setSafaricomInstalled(cachedDashboardData.safaricomInstalled ?? 0);
-        setSafaricomInstalledCommissionKsh(
-          cachedDashboardData.safaricomInstalledCommissionKsh ?? 0
-        );
-        setRecentRegistrations(cachedDashboardData.recentRegistrations);
       } else {
         const cachedAgentData = await getCachedAgentData();
-        if (!cachedAgentData) {
+        if (cachedAgentData) {
+          resolvedAgent = cachedAgentData;
+          setAgentData(cachedAgentData);
+          agentStatusForPrompt = cachedAgentData.status ?? null;
+        } else {
           Alert.alert("Error", "Failed to load user data. Please try again.");
         }
       }
     } finally {
+      // Last chance: never clear the skeleton into an "approved empty" home
+      // without at least trying agent cache again.
+      if (!resolvedAgent) {
+        const cachedAgentData = await getCachedAgentData();
+        if (cachedAgentData) {
+          setAgentData(cachedAgentData);
+          agentStatusForPrompt =
+            agentStatusForPrompt ?? cachedAgentData.status ?? null;
+        }
+      }
       setIsLoading(false);
+      setHomeLoadFinished(true);
       if (agentStatusForPrompt) {
         void evaluateDashboardPrompts(agentStatusForPrompt);
       }
@@ -927,13 +954,7 @@ export default function DashboardScreen() {
       await loadUserData();
       const agentId = agentData?.id ?? user?.id;
       if (agentId && agentData?.status === "approved") {
-        const [avail, offersRes] = await Promise.all([
-          fetchDispatchAvailability(agentId),
-          fetchActiveOffers(agentId),
-        ]);
-        setLeadsAvailable(avail.isAvailable);
-        setCanReceiveLeads(avail.canReceiveLeads);
-        setActiveOfferCount(offersRes.offers.length);
+        await refreshLeadAvailability(agentId);
       }
       setHomeRefreshKey((k) => k + 1);
     } catch (error) {
@@ -1394,11 +1415,10 @@ export default function DashboardScreen() {
 
   const tabBarClearance = getWamTabBarOffset(insets.bottom);
 
-  if (!fontsLoaded) {
-    return <HomeDashboardSkeleton />;
-  }
-
   const isApproved = agentData?.status === "approved";
+  // Dismiss skeleton as soon as agent is known (cache or network). Hold it when
+  // load is still running and agent is missing so tiles don't pop in late.
+  const showHomeSkeleton = !agentData && (isLoading || !homeLoadFinished);
   const showStatusBanner =
     !!agentData?.status && agentData.status !== "approved";
   const name = agentData?.name || user?.email || "";
@@ -1414,7 +1434,10 @@ export default function DashboardScreen() {
     airtelInstalledCommissionKsh +
     safaricomInstalledCommissionKsh +
     leadInstallCommissionKsh;
-  const walletDisplayKsh = combinedEstimatedCommissionKsh;
+  const walletDisplayKsh =
+    combinedEstimatedCommissionKsh > 0
+      ? combinedEstimatedCommissionKsh
+      : balance;
   const paidToAgentKsh = Math.max(0, paidFromLedgerKsh);
 
   // Interpolate rotation for hourglass animation
@@ -1439,7 +1462,7 @@ export default function DashboardScreen() {
         onPlayStoreOpened={handlePlayStoreOpened}
         onComplete={handleRatingComplete}
       />
-      {isLoading ? (
+      {showHomeSkeleton ? (
         <HomeDashboardSkeleton />
       ) : (
         <>
@@ -1673,6 +1696,14 @@ export default function DashboardScreen() {
               </View>
             )}
           </View>
+
+          <WorkingLocationRow
+            workingPlace={agentData?.working_place}
+            updatedAt={agentData?.working_place_updated_at}
+            onUpdate={() =>
+              router.push("/set-working-location?skipIntro=1" as any)
+            }
+          />
 
           {/* Meeting / urgent spotlight from admin notifications */}
           <HomeActionSpotlight

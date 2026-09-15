@@ -11,16 +11,6 @@ import {
   Switch,
 } from "react-native";
 import { useRouter, useFocusEffect } from "expo-router";
-import { useFonts } from "expo-font";
-import {
-  Poppins_600SemiBold,
-  Poppins_700Bold,
-} from "@expo-google-fonts/poppins";
-import {
-  Inter_400Regular,
-  Inter_500Medium,
-  Inter_600SemiBold,
-} from "@expo-google-fonts/inter";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../../lib/supabase";
 import {
@@ -44,6 +34,7 @@ import {
 import { isOnline } from "../../lib/services/syncService";
 import { fetchWalletCommissionKsh } from "../../lib/commissions/walletCommission";
 import { AgentAvatar } from "../../components/AgentAvatar";
+import { WorkingLocationRow } from "../../components/WorkingLocationRow";
 import { AppRatingPrompt } from "../../components/AppRatingPrompt";
 import { NotificationEnablePrompt } from "../../components/NotificationEnablePrompt";
 import { markAppRatingSubmitted } from "../../lib/appRatingPromptStorage";
@@ -158,14 +149,6 @@ export default function ProfileScreen() {
   const [canReceiveLeads, setCanReceiveLeads] = useState(false);
   const [togglingLeads, setTogglingLeads] = useState(false);
   const pendingEnableLeadsRef = useRef(false);
-
-  const [fontsLoaded] = useFonts({
-    Poppins_600SemiBold,
-    Poppins_700Bold,
-    Inter_400Regular,
-    Inter_500Medium,
-    Inter_600SemiBold,
-  });
 
   useEffect(() => {
     // Listen for auth state changes to handle logout immediately
@@ -503,10 +486,6 @@ export default function ProfileScreen() {
     );
   };
 
-  if (!fontsLoaded) {
-    return null;
-  }
-
   if (isLoading) {
     return (
       <View style={[styles.container, styles.loadingContainer]}>
@@ -706,34 +685,19 @@ export default function ProfileScreen() {
           </View>
         </View>
 
-        {/* Location Information */}
         <View style={styles.infoSection}>
           <View style={styles.sectionTitleRow}>
             <Text style={[styles.sectionTitle, { marginBottom: 0 }]}>
               Location
             </Text>
-            <TouchableOpacity
-              onPress={() => router.push("/edit-profile" as any)}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Text style={styles.editLink}>Edit</Text>
-            </TouchableOpacity>
           </View>
-          <View style={styles.infoCard}>
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Town</Text>
-              <Text style={styles.infoValue}>
-                {agentData?.town || "Not set"}
-              </Text>
-            </View>
-            <View style={styles.infoDivider} />
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Area</Text>
-              <Text style={styles.infoValue}>
-                {agentData?.area || "Not set"}
-              </Text>
-            </View>
-          </View>
+          <WorkingLocationRow
+            workingPlace={agentData?.working_place}
+            updatedAt={agentData?.working_place_updated_at}
+            onUpdate={() =>
+              router.push("/set-working-location?skipIntro=1" as any)
+            }
+          />
         </View>
 
         {/* Account Details */}

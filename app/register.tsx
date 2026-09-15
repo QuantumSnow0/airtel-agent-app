@@ -15,17 +15,7 @@ import { useRouter } from "expo-router";
 import { supabase } from "../lib/supabase";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useFonts } from "expo-font";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import {
-  Poppins_600SemiBold,
-  Poppins_700Bold,
-} from "@expo-google-fonts/poppins";
-import {
-  Inter_400Regular,
-  Inter_500Medium,
-  Inter_600SemiBold,
-} from "@expo-google-fonts/inter";
 import {
   personalInfoSchema,
   contactInfoSchema,
@@ -34,8 +24,9 @@ import {
 } from "@/lib/validation/registerSchemas";
 import PersonalInfoStep from "@/components/register/PersonalInfoStep";
 import ContactInfoStep from "@/components/register/ContactInfoStep";
-import TownPickerModal from "@/components/register/TownPickerModal";
 import { registerStyles } from "@/components/register/styles";
+import { deriveTownAreaFromPlace } from "@/lib/google-places/parseGooglePlace";
+import type { SelectedGooglePlace } from "@/lib/google-places/types";
 
 export default function RegisterScreen() {
   const router = useRouter();
@@ -43,7 +34,6 @@ export default function RegisterScreen() {
   const [currentStep, setCurrentStep] = useState(1);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [showTownPicker, setShowTownPicker] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isCheckingEmail, setIsCheckingEmail] = useState(false);
   const scrollViewRef = useRef<ScrollView | null>(null);
@@ -53,14 +43,6 @@ export default function RegisterScreen() {
     personalInfo?: PersonalInfoFormData;
     contactInfo?: ContactInfoFormData;
   }>({});
-
-  const [fontsLoaded] = useFonts({
-    Poppins_600SemiBold,
-    Poppins_700Bold,
-    Inter_400Regular,
-    Inter_500Medium,
-    Inter_600SemiBold,
-  });
 
   // Initialize forms - must be before early return
   const personalInfoForm = useForm<PersonalInfoFormData>({
@@ -82,23 +64,18 @@ export default function RegisterScreen() {
     defaultValues: {
       airtelPhone: "",
       safaricomPhone: "",
-      town: "",
-      area: "",
+      workingPlace: undefined as unknown as SelectedGooglePlace,
     },
   });
 
   // Reset scroll position when step changes - MUST be before early return
   useEffect(() => {
-    if (fontsLoaded) {
-      scrollViewRef.current?.scrollTo({ y: 0, animated: false });
-    }
-  }, [currentStep, fontsLoaded]);
+    scrollViewRef.current?.scrollTo({ y: 0, animated: false });
+  }, [currentStep]);
 
   // Handle keyboard show/hide - removed auto-scroll to prevent content going out of view
   // Individual inputs will handle their own scrolling via onFocus
   useEffect(() => {
-    if (!fontsLoaded) return;
-
     // Just listen for keyboard hide to ensure proper cleanup
     const keyboardDidHideListener = Keyboard.addListener(
       Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide",
@@ -110,12 +87,7 @@ export default function RegisterScreen() {
     return () => {
       keyboardDidHideListener.remove();
     };
-  }, [fontsLoaded]);
-
-  // Early return MUST be after all hooks
-  if (!fontsLoaded) {
-    return null;
-  }
+  }, []);
 
   const onPersonalInfoSubmit = async (data: PersonalInfoFormData) => {
     // Check if email already exists before proceeding to step 2
@@ -230,6 +202,9 @@ export default function RegisterScreen() {
 
       // 1. Sign up with Supabase Auth using OTP flow
       // This sends an OTP code via email instead of a confirmation link
+      const located = deriveTownAreaFromPlace(
+        data.workingPlace as SelectedGooglePlace,
+      );
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email: formData.personalInfo.email,
         password: formData.personalInfo.password,
@@ -241,8 +216,9 @@ export default function RegisterScreen() {
             name: formData.personalInfo.name,
             airtel_phone: data.airtelPhone,
             safaricom_phone: data.safaricomPhone,
-            town: data.town,
-            area: data.area,
+            town: located.town,
+            area: located.area,
+            working_place: data.workingPlace,
           },
         },
       });
@@ -370,10 +346,6 @@ export default function RegisterScreen() {
     }
   };
 
-  const handleSelectTown = (town: string) => {
-    contactInfoForm.setValue("town", town);
-  };
-
   return (
     <View style={registerStyles.container}>
       <KeyboardAvoidingView
@@ -426,23 +398,8 @@ export default function RegisterScreen() {
               scrollViewRef={
                 scrollViewRef as React.RefObject<ScrollView | null>
               }
-              onOpenTownPicker={() => {
-                Keyboard.dismiss();
-                setTimeout(() => {
-                  scrollViewRef.current?.scrollToEnd({ animated: true });
-                  setShowTownPicker(true);
-                }, 100);
-              }}
             />
           )}
-
-          {/* Town Picker Modal */}
-          <TownPickerModal
-            visible={showTownPicker}
-            selectedTown={contactInfoForm.watch("town")}
-            onClose={() => setShowTownPicker(false)}
-            onSelectTown={handleSelectTown}
-          />
 
           {/* Navigation Buttons */}
           <View style={registerStyles.buttonContainer}>

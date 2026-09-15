@@ -80,7 +80,6 @@ export function NotificationDetailHost() {
             styles.sheet,
             { paddingBottom: Math.max(insets.bottom, scaleHeight(16)) },
           ]}
-          onStartShouldSetResponder={() => true}
         >
           <View style={styles.handle} />
 
@@ -109,56 +108,60 @@ export function NotificationDetailHost() {
             contentContainerStyle={styles.messageContent}
             showsVerticalScrollIndicator
             bounces
+            nestedScrollEnabled
+            keyboardShouldPersistTaps="handled"
           >
-            <Text style={styles.message}>{payload?.message}</Text>
-          </ScrollView>
+            <Text style={styles.message} selectable>
+              {payload?.message}
+            </Text>
 
-          {payload?.actionUrl ? (
-            <View style={styles.linkBox}>
-              <MaterialIcons
-                name="link"
-                size={scaleWidth(16)}
-                color="#0066CC"
-              />
-              <Text style={styles.linkText} numberOfLines={2}>
-                {payload.actionUrl}
-              </Text>
-            </View>
-          ) : null}
+            {payload?.actionUrl ? (
+              <View style={styles.linkBox}>
+                <MaterialIcons
+                  name="link"
+                  size={scaleWidth(16)}
+                  color="#0066CC"
+                />
+                <Text style={styles.linkText}>{payload.actionUrl}</Text>
+              </View>
+            ) : null}
+          </ScrollView>
 
           {linkError ? (
             <Text style={styles.errorText}>{linkError}</Text>
           ) : null}
 
-          {payload?.actionUrl ? (
-            <TouchableOpacity
-              style={styles.primaryBtn}
-              onPress={() => void openLink()}
-              disabled={opening}
-              activeOpacity={0.88}
-            >
-              {opening ? (
-                <ActivityIndicator color="#FFFFFF" />
-              ) : (
-                <>
-                  <MaterialIcons
-                    name="open-in-new"
-                    size={scaleWidth(18)}
-                    color="#FFFFFF"
-                  />
-                  <Text style={styles.primaryBtnText}>Open link</Text>
-                </>
-              )}
-            </TouchableOpacity>
-          ) : null}
+          <View style={styles.footer}>
+            {payload?.actionUrl ? (
+              <TouchableOpacity
+                style={styles.primaryBtn}
+                onPress={() => void openLink()}
+                disabled={opening}
+                activeOpacity={0.88}
+              >
+                {opening ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <>
+                    <MaterialIcons
+                      name="open-in-new"
+                      size={scaleWidth(18)}
+                      color="#FFFFFF"
+                    />
+                    <Text style={styles.primaryBtnText}>Open link</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            ) : null}
 
-          <TouchableOpacity
-            style={styles.secondaryBtn}
-            onPress={close}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.secondaryBtnText}>Close</Text>
-          </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.secondaryBtn}
+              onPress={close}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.secondaryBtnText}>Close</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
     </Modal>
@@ -176,12 +179,12 @@ const styles = StyleSheet.create({
   },
   sheet: {
     width: "100%",
+    maxHeight: "88%",
     backgroundColor: "#FFFFFF",
     borderTopLeftRadius: scaleWidth(20),
     borderTopRightRadius: scaleWidth(20),
     paddingHorizontal: scaleWidth(20),
     paddingTop: scaleHeight(10),
-    maxHeight: "88%",
   },
   handle: {
     alignSelf: "center",
@@ -225,11 +228,13 @@ const styles = StyleSheet.create({
     marginBottom: scaleHeight(12),
   },
   messageScroll: {
-    maxHeight: scaleHeight(320),
-    marginBottom: scaleHeight(14),
+    flexGrow: 0,
+    flexShrink: 1,
+    marginBottom: scaleHeight(8),
   },
   messageContent: {
-    paddingBottom: scaleHeight(8),
+    paddingBottom: scaleHeight(12),
+    flexGrow: 1,
   },
   message: {
     fontSize: scaleFont(15),
@@ -244,7 +249,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#F0F7FF",
     borderRadius: scaleWidth(12),
     padding: scaleWidth(12),
-    marginBottom: scaleHeight(12),
+    marginTop: scaleHeight(16),
     borderWidth: 1,
     borderColor: "#D6E8FF",
   },
@@ -260,6 +265,10 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_500Medium",
     color: "#C62828",
     marginBottom: scaleHeight(10),
+  },
+  footer: {
+    flexShrink: 0,
+    paddingTop: scaleHeight(4),
   },
   primaryBtn: {
     flexDirection: "row",

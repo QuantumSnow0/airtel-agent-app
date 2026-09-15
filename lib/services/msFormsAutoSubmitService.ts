@@ -124,6 +124,7 @@ export async function syncPendingMSFormsForAgent(
     .select("id, customer_name")
     .eq("agent_id", agentId)
     .eq("commission_exempt", false)
+    .eq("registration_workflow", "legacy_wam")
     .is("ms_forms_response_id", null)
     .order("created_at", { ascending: true });
 

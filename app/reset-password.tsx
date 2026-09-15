@@ -16,12 +16,6 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useFonts } from "expo-font";
-import {
-  Poppins_600SemiBold,
-  Poppins_700Bold,
-} from "@expo-google-fonts/poppins";
-import { Inter_400Regular, Inter_500Medium } from "@expo-google-fonts/inter";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../lib/supabase";
 import * as Linking from "expo-linking";
@@ -48,13 +42,6 @@ export default function ResetPasswordScreen() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [passwordReset, setPasswordReset] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
-
-  const [fontsLoaded] = useFonts({
-    Poppins_600SemiBold,
-    Poppins_700Bold,
-    Inter_400Regular,
-    Inter_500Medium,
-  });
 
   const {
     control,
@@ -234,21 +221,15 @@ export default function ResetPasswordScreen() {
     };
 
     // Process the link after fonts are loaded
-    if (fontsLoaded) {
-      // Process immediately - Supabase with detectSessionInUrl: true should handle it
-      // But we'll also manually try to process tokens from URL
-      const timer = setTimeout(() => {
-        processPasswordResetLink();
-      }, 500); // Shorter delay since detectSessionInUrl should help
+    const timer = setTimeout(() => {
+      processPasswordResetLink();
+    }, 500);
 
-      return () => clearTimeout(timer);
-    }
-  }, [fontsLoaded, params]);
+    return () => clearTimeout(timer);
+  }, [params]);
 
   // Listen for auth state changes to detect when session is established
   useEffect(() => {
-    if (!fontsLoaded) return;
-
     const { data: { subscription: authSubscription } } = supabase.auth.onAuthStateChange((event, session) => {
       console.log("Auth state changed:", event, session ? "Session exists" : "No session");
       
@@ -301,7 +282,7 @@ export default function ResetPasswordScreen() {
       authSubscription.unsubscribe();
       linkingSubscription.remove();
     };
-  }, [fontsLoaded]);
+  }, []);
 
   // Handle keyboard show/hide to ensure button is visible
   useEffect(() => {
@@ -328,10 +309,6 @@ export default function ResetPasswordScreen() {
       keyboardDidHideListener.remove();
     };
   }, []);
-
-  if (!fontsLoaded) {
-    return null;
-  }
 
   // Show loading state while processing the reset link
   if (isProcessingLink) {

@@ -17,10 +17,11 @@ import { useRouter } from "expo-router";
 import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
 import { fetchHomePromos } from "../lib/services/homePromosService";
 import {
-  HOME_PROMO_FIXTURES,
-  type HomePromoCtaAction,
-  type HomePromoSlide,
-} from "../lib/homePromoFixtures";
+  getCachedHomePromos,
+  saveHomePromosToCache,
+  clearHomePromosCache,
+} from "../lib/cache/homePromosCache";
+import type { HomePromoCtaAction, HomePromoSlide } from "../lib/homePromoFixtures";
 import {
   scaleFont,
   scaleHeight,
@@ -28,7 +29,6 @@ import {
 } from "../lib/utils/responsive";
 
 export type { HomePromoCtaAction, HomePromoSlide };
-export { HOME_PROMO_FIXTURES };
 
 const GOLD = "#F5A623";
 const AUTO_ADVANCE_MS = 5500;
@@ -122,10 +122,8 @@ export function HomePromoCarousel({
   const indexRef = useRef(0);
   const [index, setIndex] = useState(0);
   const [dragging, setDragging] = useState(false);
-  const [loading, setLoading] = useState(!slidesProp);
-  const [slides, setSlides] = useState<HomePromoSlide[]>(
-    slidesProp ?? HOME_PROMO_FIXTURES,
-  );
+  const [slides, setSlides] = useState<HomePromoSlide[]>(slidesProp ?? []);
+  const [ready, setReady] = useState(!!slidesProp);
   const [cardWidth, setCardWidth] = useState(
     Dimensions.get("window").width - scaleWidth(16),
   );
@@ -133,21 +131,53 @@ export function HomePromoCarousel({
   const load = useCallback(async () => {
     if (slidesProp) {
       setSlides(slidesProp);
-      setLoading(false);
+      setReady(true);
       return;
     }
-    setLoading(true);
-    try {
-      const next = await fetchHomePromos();
-      setSlides(next);
-    } finally {
-      setLoading(false);
+
+    const cached = await getCachedHomePromos();
+    if (cached?.length) {
+      setSlides(cached);
+      setReady(true);
     }
+
+    const { slides: next, ok } = await fetchHomePromos();
+    if (ok && next.length === 0) {
+      setSlides([]);
+      void clearHomePromosCache();
+    } else if (next.length > 0) {
+      const urls = next.map((slide) => slide.imageUrl);
+      const cachedUrls = new Set((cached ?? []).map((slide) => slide.imageUrl));
+      const missing = urls.filter((url) => !cachedUrls.has(url));
+      if (missing.length > 0) {
+        await Promise.race([
+          Image.prefetch(missing),
+          new Promise((resolve) => setTimeout(resolve, 1200)),
+        ]);
+      }
+      setSlides(next);
+      void saveHomePromosToCache(next);
+    }
+    setReady(true);
   }, [slidesProp]);
 
   useEffect(() => {
     void load();
   }, [load, refreshKey]);
+
+  useEffect(() => {
+    indexRef.current = 0;
+    setIndex(0);
+    scrollRef.current?.scrollTo({ x: 0, animated: false });
+  }, [slides[0]?.id]);
+
+  useEffect(() => {
+    for (const slide of slides) {
+      if (slide.imageUrl) {
+        void Image.prefetch(slide.imageUrl);
+      }
+    }
+  }, [slides]);
 
   const count = slides.length;
 
@@ -166,12 +196,12 @@ export function HomePromoCarousel({
   );
 
   useEffect(() => {
-    if (count <= 1 || dragging || loading) return;
+    if (count <= 1 || dragging) return;
     const timer = setInterval(() => {
       goTo(indexRef.current + 1);
     }, AUTO_ADVANCE_MS);
     return () => clearInterval(timer);
-  }, [count, dragging, goTo, loading]);
+  }, [count, dragging, goTo]);
 
   const onScrollEnd = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
     const x = e.nativeEvent.contentOffset.x;
@@ -194,10 +224,10 @@ export function HomePromoCarousel({
     }
   };
 
-  if (loading) {
+  if (!ready) {
     return (
       <View style={styles.wrap}>
-        <View style={[styles.card, styles.skeleton]} />
+        <View style={[styles.frame, styles.skeleton]} />
       </View>
     );
   }
@@ -229,12 +259,13 @@ export function HomePromoCarousel({
           {slides.map((slide) => (
             <View key={slide.id} style={[styles.card, { width: cardWidth }]}>
               <Image
-                source={
-                  slide.imageUrl ? { uri: slide.imageUrl } : slide.image
-                }
+                source={{ uri: slide.imageUrl }}
                 style={styles.image}
                 contentFit="cover"
-                transition={280}
+                cachePolicy="memory-disk"
+                priority="high"
+                recyclingKey={slide.id}
+                transition={0}
               />
               <SlideFade />
 
@@ -278,7 +309,7 @@ export function HomePromoCarousel({
             <ProgressDots
               count={count}
               index={index}
-              playing={!dragging && !loading}
+              playing={!dragging}
             />
           </View>
         ) : null}
@@ -305,8 +336,8 @@ const styles = StyleSheet.create({
     backgroundColor: "#0F172A",
   },
   skeleton: {
-    width: "100%",
-    backgroundColor: "#E2E8F0",
+    height: CARD_HEIGHT,
+    backgroundColor: "#0F172A",
   },
   image: {
     ...StyleSheet.absoluteFillObject,
