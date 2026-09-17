@@ -27,16 +27,31 @@ import ContactInfoStep from "@/components/register/ContactInfoStep";
 import { registerStyles } from "@/components/register/styles";
 import { deriveTownAreaFromPlace } from "@/lib/google-places/parseGooglePlace";
 import type { SelectedGooglePlace } from "@/lib/google-places/types";
+import {
+  checkAgentPhonesTaken,
+  phoneTakenUserMessage,
+} from "@/lib/auth/agentPhoneCheck";
+import { GoogleSignInButton, AuthMethodButton } from "@/components/auth/GoogleSignInButton";
+import {
+  isGoogleOAuthBrowserOpen,
+  isGoogleOAuthNavigationOwned,
+  waitForSession,
+} from "@/lib/auth/googleAuth";
+import { getPostAuthHref } from "@/lib/google-places/workingPlaceGate";
 
 export default function RegisterScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  /** null = choose Google vs email; 'email' = multi-step form */
+  const [signupPath, setSignupPath] = useState<"choose" | "email">("choose");
   const [currentStep, setCurrentStep] = useState(1);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isCheckingEmail, setIsCheckingEmail] = useState(false);
   const scrollViewRef = useRef<ScrollView | null>(null);
+  /** Hide register UI while bouncing signed-in users away (stops flash after Google). */
+  const [routingAway, setRoutingAway] = useState(true);
 
   // Store form data across steps
   const [formData, setFormData] = useState<{
@@ -73,6 +88,33 @@ export default function RegisterScreen() {
     scrollViewRef.current?.scrollTo({ y: 0, animated: false });
   }, [currentStep]);
 
+  // If already signed in (e.g. Google returned under this screen), leave immediately.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const deadline = Date.now() + 2500;
+      while (
+        !cancelled &&
+        Date.now() < deadline &&
+        (isGoogleOAuthBrowserOpen() || isGoogleOAuthNavigationOwned())
+      ) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      if (cancelled) return;
+      const session = await waitForSession(1500);
+      if (cancelled) return;
+      if (session?.user?.email_confirmed_at) {
+        const href = await getPostAuthHref(session.user.id);
+        if (!cancelled) router.replace(href as any);
+        return;
+      }
+      if (!cancelled) setRoutingAway(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
+
   // Handle keyboard show/hide - removed auto-scroll to prevent content going out of view
   // Individual inputs will handle their own scrolling via onFocus
   useEffect(() => {
@@ -88,6 +130,11 @@ export default function RegisterScreen() {
       keyboardDidHideListener.remove();
     };
   }, []);
+
+  const handleGoogleSignUp = () => {
+    // Leave register/welcome stack immediately so Get Started cannot flash.
+    router.replace({ pathname: "/google-auth", params: { start: "1" } } as any);
+  };
 
   const onPersonalInfoSubmit = async (data: PersonalInfoFormData) => {
     // Check if email already exists before proceeding to step 2
@@ -192,10 +239,23 @@ export default function RegisterScreen() {
     setIsSubmitting(true);
 
     try {
-      const allFormData = { ...formData.personalInfo, ...data };
-
       if (!formData.personalInfo) {
         Alert.alert("Error", "Please complete all steps");
+        setIsSubmitting(false);
+        return;
+      }
+
+      const taken = await checkAgentPhonesTaken({
+        airtelPhone: data.airtelPhone,
+        safaricomPhone: data.safaricomPhone,
+      });
+      if (taken.taken) {
+        router.replace({
+          pathname: "/login",
+          params: {
+            error: phoneTakenUserMessage(),
+          },
+        } as any);
         setIsSubmitting(false);
         return;
       }
@@ -335,16 +395,24 @@ export default function RegisterScreen() {
   };
 
   const handleBack = () => {
-    if (currentStep === 1) {
-      router.back();
-    } else {
-      setCurrentStep(currentStep - 1);
-      // Reset scroll position when going back
-      setTimeout(() => {
-        scrollViewRef.current?.scrollTo({ y: 0, animated: false });
-      }, 100);
+    if (signupPath === "choose") {
+      // Welcome uses replace(), so there may be no safe screen underneath.
+      router.replace("/" as any);
+      return;
     }
+    if (currentStep === 1) {
+      setSignupPath("choose");
+      return;
+    }
+    setCurrentStep(currentStep - 1);
+    setTimeout(() => {
+      scrollViewRef.current?.scrollTo({ y: 0, animated: false });
+    }, 100);
   };
+
+  if (routingAway) {
+    return <View style={[registerStyles.container, { backgroundColor: "#FFFFFF" }]} />;
+  }
 
   return (
     <View style={registerStyles.container}>
@@ -356,7 +424,10 @@ export default function RegisterScreen() {
       >
         <ScrollView
           ref={scrollViewRef}
-          contentContainerStyle={registerStyles.scrollContent}
+          contentContainerStyle={[
+            registerStyles.scrollContent,
+            signupPath === "choose" && { paddingBottom: 24, flexGrow: 1 },
+          ]}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={true}
           bounces={true}
@@ -365,77 +436,168 @@ export default function RegisterScreen() {
           alwaysBounceVertical={false}
           scrollEnabled={true}
         >
-          {/* Header */}
-          <View style={registerStyles.header}>
-            <Text style={registerStyles.stepIndicator}>
-              Step {currentStep} of 2
-            </Text>
-            <Text style={registerStyles.title}>
-              {currentStep === 1
-                ? "Agent Information"
-                : "Contact & Location Information"}
-            </Text>
-          </View>
-
-          {/* Step 1: Agent Information */}
-          {currentStep === 1 && (
-            <PersonalInfoStep
-              control={personalInfoForm.control}
-              showPassword={showPassword}
-              showConfirmPassword={showConfirmPassword}
-              onTogglePassword={() => setShowPassword(!showPassword)}
-              onToggleConfirmPassword={() =>
-                setShowConfirmPassword(!showConfirmPassword)
-              }
-              scrollViewRef={scrollViewRef}
-            />
-          )}
-
-          {/* Step 2: Contact Information */}
-          {currentStep === 2 && (
-            <ContactInfoStep
-              control={contactInfoForm.control}
-              scrollViewRef={
-                scrollViewRef as React.RefObject<ScrollView | null>
-              }
-            />
-          )}
-
-          {/* Navigation Buttons */}
-          <View style={registerStyles.buttonContainer}>
-            <TouchableOpacity
-              style={registerStyles.backButton}
-              onPress={handleBack}
-            >
-              <Text style={registerStyles.backButtonText}>Back</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[
-                registerStyles.nextButton,
-                isSubmitting && registerStyles.nextButtonDisabled,
-              ]}
-              onPress={
-                currentStep === 1
-                  ? personalInfoForm.handleSubmit(
-                      onPersonalInfoSubmit,
-                      onPersonalInfoError
-                    )
-                  : contactInfoForm.handleSubmit(
-                      onContactInfoSubmit,
-                      onContactInfoError
-                    )
-              }
-              disabled={isSubmitting || isCheckingEmail}
-            >
-              {isSubmitting || isCheckingEmail ? (
-                <ActivityIndicator color="#FFFFFF" />
-              ) : (
-                <Text style={registerStyles.nextButtonText}>
-                  {currentStep === 2 ? "Register" : "Next"}
+          {signupPath === "choose" ? (
+            <View style={{ flexGrow: 1, minHeight: 480 }}>
+              <View style={registerStyles.header}>
+                <Text style={registerStyles.title}>Create account</Text>
+                <Text style={[registerStyles.helperText, { marginTop: 8 }]}>
+                  Choose how you want to sign up. With Google we only ask for
+                  phones and working location next.
                 </Text>
+              </View>
+
+              <GoogleSignInButton
+                onPress={handleGoogleSignUp}
+                disabled={isSubmitting}
+                subtitle="Fast, secure and recommended"
+                style={{ marginBottom: 16 }}
+              />
+
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  marginBottom: 16,
+                  gap: 12,
+                }}
+              >
+                <View
+                  style={{ flex: 1, height: 1, backgroundColor: "#E0E0E0" }}
+                />
+                <Text
+                  style={{
+                    fontSize: 13,
+                    fontFamily: "Inter_400Regular",
+                    color: "#999999",
+                  }}
+                >
+                  or
+                </Text>
+                <View
+                  style={{ flex: 1, height: 1, backgroundColor: "#E0E0E0" }}
+                />
+              </View>
+
+              <AuthMethodButton
+                onPress={() => setSignupPath("email")}
+                disabled={false}
+                title="Sign up with email"
+                subtitle="Use your email to create an account"
+                materialIcon="email"
+                variant="outline"
+              />
+
+              <View style={{ flex: 1, minHeight: 48 }} />
+
+              <View
+                style={{
+                  height: 1,
+                  backgroundColor: "#E0E0E0",
+                  width: "100%",
+                  marginBottom: 16,
+                }}
+              />
+
+              <TouchableOpacity
+                style={{
+                  alignItems: "center",
+                  paddingVertical: 12,
+                  paddingBottom: Math.max(insets.bottom, 12) + 8,
+                }}
+                onPress={() => router.push("/login" as any)}
+                activeOpacity={0.7}
+              >
+                <Text
+                  style={{
+                    fontSize: 14,
+                    fontFamily: "Inter_400Regular",
+                    color: "#666666",
+                    textAlign: "center",
+                  }}
+                >
+                  Already an agent?{" "}
+                  <Text
+                    style={{
+                      color: "#0066CC",
+                      fontFamily: "Inter_500Medium",
+                    }}
+                  >
+                    Sign in
+                  </Text>
+                </Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <>
+              <View style={registerStyles.header}>
+                <Text style={registerStyles.stepIndicator}>
+                  Step {currentStep} of 2
+                </Text>
+                <Text style={registerStyles.title}>
+                  {currentStep === 1
+                    ? "Agent Information"
+                    : "Contact & Location Information"}
+                </Text>
+              </View>
+
+              {currentStep === 1 && (
+                <PersonalInfoStep
+                  control={personalInfoForm.control}
+                  showPassword={showPassword}
+                  showConfirmPassword={showConfirmPassword}
+                  onTogglePassword={() => setShowPassword(!showPassword)}
+                  onToggleConfirmPassword={() =>
+                    setShowConfirmPassword(!showConfirmPassword)
+                  }
+                  scrollViewRef={scrollViewRef}
+                />
               )}
-            </TouchableOpacity>
-          </View>
+
+              {currentStep === 2 && (
+                <ContactInfoStep
+                  control={contactInfoForm.control}
+                  scrollViewRef={
+                    scrollViewRef as React.RefObject<ScrollView | null>
+                  }
+                />
+              )}
+
+              <View style={registerStyles.buttonContainer}>
+                <TouchableOpacity
+                  style={registerStyles.backButton}
+                  onPress={handleBack}
+                >
+                  <Text style={registerStyles.backButtonText}>Back</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    registerStyles.nextButton,
+                    isSubmitting && registerStyles.nextButtonDisabled,
+                  ]}
+                  onPress={
+                    currentStep === 1
+                      ? personalInfoForm.handleSubmit(
+                          onPersonalInfoSubmit,
+                          onPersonalInfoError,
+                        )
+                      : contactInfoForm.handleSubmit(
+                          onContactInfoSubmit,
+                          onContactInfoError,
+                        )
+                  }
+                  disabled={isSubmitting || isCheckingEmail}
+                >
+                  {isSubmitting || isCheckingEmail ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <Text style={registerStyles.nextButtonText}>
+                      {currentStep === 2 ? "Register" : "Next"}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </>
+          )}
         </ScrollView>
       </KeyboardAvoidingView>
     </View>

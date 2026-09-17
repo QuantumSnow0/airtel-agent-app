@@ -1,7 +1,7 @@
 import {
   ActivityIndicator,
-  FlatList,
   Keyboard,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -93,15 +93,15 @@ export function PlacesLocationSearch({
           {status && predictions.length === 0 && !loading ? (
             <Text style={styles.status}>{status}</Text>
           ) : (
-            <FlatList
-              data={predictions}
-              keyExtractor={(item) => item.placeId}
+            <ScrollView
               keyboardShouldPersistTaps="always"
               nestedScrollEnabled
-              scrollEnabled={predictions.length > 4}
               style={{ maxHeight: menuMaxHeight }}
-              renderItem={({ item }) => (
+              showsVerticalScrollIndicator={predictions.length > 4}
+            >
+              {predictions.map((item) => (
                 <TouchableOpacity
+                  key={item.placeId}
                   style={styles.row}
                   onPress={() => onPickSuggestion(item)}
                   activeOpacity={0.7}
@@ -113,8 +113,8 @@ export function PlacesLocationSearch({
                     </Text>
                   ) : null}
                 </TouchableOpacity>
-              )}
-            />
+              ))}
+            </ScrollView>
           )}
         </View>
       ) : null}

@@ -19,6 +19,12 @@ import { z } from "zod";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../lib/supabase";
 import { getPostAuthHref } from "../lib/google-places/workingPlaceGate";
+import {
+  isGoogleOAuthBrowserOpen,
+  isGoogleOAuthNavigationOwned,
+  waitForSession,
+} from "../lib/auth/googleAuth";
+import { GoogleSignInButton, AuthMethodButton } from "../components/auth/GoogleSignInButton";
 
 const loginSchema = z.object({
   email: z.string().email("Please enter a valid email address"),
@@ -37,6 +43,11 @@ export default function LoginScreen() {
   const [isResendingOtp, setIsResendingOtp] = useState(false);
   const [unverifiedEmail, setUnverifiedEmail] = useState<string | null>(null);
   const [checkingSession, setCheckingSession] = useState(true);
+  const [showEmailForm, setShowEmailForm] = useState(
+    () =>
+      typeof params.email === "string" ||
+      typeof params.error === "string",
+  );
   const scrollViewRef = useRef<ScrollView>(null);
 
   const {
@@ -75,9 +86,18 @@ export default function LoginScreen() {
 
     void (async () => {
       try {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
+        // Don't block forever if OAuth lock is stuck
+        const deadline = Date.now() + 2500;
+        while (
+          !cancelled &&
+          Date.now() < deadline &&
+          (isGoogleOAuthBrowserOpen() || isGoogleOAuthNavigationOwned())
+        ) {
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        if (cancelled) return;
+
+        const session = await waitForSession(1500);
         if (cancelled || !session?.user) return;
 
         if (!session.user.email_confirmed_at) {
@@ -101,7 +121,11 @@ export default function LoginScreen() {
     };
   }, [router]);
 
-  // Removed auto-scroll handlers - KeyboardAvoidingView will handle layout adjustments
+  const handleGoogleSignIn = () => {
+    setError(null);
+    // Leave login/welcome stack immediately so Get Started cannot flash.
+    router.replace({ pathname: "/google-auth", params: { start: "1" } } as any);
+  };
 
   const onSubmit = async (data: LoginFormData) => {
     setIsLoading(true);
@@ -157,7 +181,8 @@ export default function LoginScreen() {
 
       if (agentError) {
         console.error("Error checking agent status:", agentError);
-        router.replace("/dashboard" as any);
+        const href = await getPostAuthHref(authData.user.id);
+        router.replace(href as any);
         setIsLoading(false);
         return;
       }
@@ -283,167 +308,223 @@ export default function LoginScreen() {
           <View style={styles.header}>
             <Text style={styles.title}>Sign In</Text>
             <Text style={styles.subtitle}>
-              Enter your credentials to access your account
+              {showEmailForm
+                ? "Enter your email and password"
+                : "Continue with Google or use your email"}
             </Text>
           </View>
 
-          {/* Form */}
-          <View style={styles.form}>
-            {/* Email Field */}
-            <View style={styles.fieldContainer}>
-              <Text style={styles.label}>Email Address</Text>
-              <Controller
-                control={control}
-                name="email"
-                render={({
-                  field: { onChange, onBlur, value },
-                  fieldState: { error },
-                }) => (
-                  <>
-                    <TextInput
-                      style={[styles.input, error && styles.inputError]}
-                      placeholder="Enter your email address"
-                      placeholderTextColor="#999999"
-                      value={value}
-                      onChangeText={(text) => {
-                        onChange(text);
-                        setError(null);
-                        setUnverifiedEmail(null);
-                      }}
-                      onBlur={onBlur}
-                      keyboardType="email-address"
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      editable={!isLoading}
-                    />
-                    {error && (
-                      <Text style={styles.errorText}>{error.message}</Text>
-                    )}
-                  </>
-                )}
-              />
+          {error && !showEmailForm ? (
+            <View style={[styles.errorContainer, { marginBottom: 16 }]}>
+              <Text style={styles.errorMessage}>{error}</Text>
             </View>
+          ) : null}
 
-            {/* Password Field */}
-            <View style={styles.fieldContainer}>
-              <Text style={styles.label}>Password</Text>
-              <View style={styles.passwordContainer}>
-                <Controller
-                  control={control}
-                  name="password"
-                  render={({
-                    field: { onChange, onBlur, value },
-                    fieldState: { error },
-                  }) => (
-                    <>
-                      <TextInput
-                        style={[
-                          styles.input,
-                          styles.passwordInput,
-                          error && styles.inputError,
-                        ]}
-                        placeholder="Enter your password"
-                        placeholderTextColor="#999999"
-                        value={value}
-                        onChangeText={(text) => {
-                          onChange(text);
-                          setError(null);
-                        }}
-                        onFocus={() => {
-                          // KeyboardAvoidingView will handle the layout adjustment
-                        }}
-                        onBlur={onBlur}
-                        secureTextEntry={!showPassword}
-                        autoCapitalize="none"
-                        autoCorrect={false}
-                        editable={!isLoading}
-                      />
-                      {error && (
-                        <Text style={styles.errorText}>{error.message}</Text>
-                      )}
-                    </>
-                  )}
-                />
+          <GoogleSignInButton
+            onPress={handleGoogleSignIn}
+            disabled={isLoading}
+            subtitle="Fast, secure and recommended"
+            style={{ marginBottom: 8 }}
+          />
+
+          {!showEmailForm ? (
+            <>
+              <View style={styles.orRow}>
+                <View style={styles.orLine} />
+                <Text style={styles.orText}>or</Text>
+                <View style={styles.orLine} />
+              </View>
+
+              <AuthMethodButton
+                onPress={() => setShowEmailForm(true)}
+                disabled={isLoading}
+                title="Sign in with email"
+                subtitle="Use your email and password"
+                materialIcon="email"
+                style={{ marginBottom: 8 }}
+              />
+
+              <View style={{ flexGrow: 1, minHeight: 40 }} />
+
+              <View style={[styles.signUpContainer, { marginTop: 24, marginBottom: 8 }]}>
+                <Text style={styles.signUpText}>Don’t have an account? </Text>
                 <TouchableOpacity
-                  style={styles.eyeButton}
-                  onPress={() => setShowPassword(!showPassword)}
+                  onPress={() => {
+                    router.push("/register" as any);
+                  }}
+                  activeOpacity={0.7}
                 >
-                  <Text style={styles.eyeButtonText}>
-                    {showPassword ? "Hide" : "Show"}
-                  </Text>
+                  <Text style={styles.signUpLink}>Sign Up</Text>
                 </TouchableOpacity>
               </View>
-            </View>
+            </>
+          ) : (
+            <>
+              <View style={styles.orRow}>
+                <View style={styles.orLine} />
+                <Text style={styles.orText}>email</Text>
+                <View style={styles.orLine} />
+              </View>
 
-            {/* Error Message */}
-            {error && (
-              <View style={styles.errorContainer}>
-                <Text style={styles.errorMessage}>{error}</Text>
-                {unverifiedEmail && (
+              <View style={styles.form}>
+                <View style={styles.fieldContainer}>
+                  <Text style={styles.label}>Email Address</Text>
+                  <Controller
+                    control={control}
+                    name="email"
+                    render={({
+                      field: { onChange, onBlur, value },
+                      fieldState: { error },
+                    }) => (
+                      <>
+                        <TextInput
+                          style={[styles.input, error && styles.inputError]}
+                          placeholder="Enter your email address"
+                          placeholderTextColor="#999999"
+                          value={value}
+                          onChangeText={(text) => {
+                            onChange(text);
+                            setError(null);
+                            setUnverifiedEmail(null);
+                          }}
+                          onBlur={onBlur}
+                          keyboardType="email-address"
+                          autoCapitalize="none"
+                          autoCorrect={false}
+                          editable={!isLoading}
+                        />
+                        {error && (
+                          <Text style={styles.errorText}>{error.message}</Text>
+                        )}
+                      </>
+                    )}
+                  />
+                </View>
+
+                <View style={styles.fieldContainer}>
+                  <Text style={styles.label}>Password</Text>
+                  <View style={styles.passwordContainer}>
+                    <Controller
+                      control={control}
+                      name="password"
+                      render={({
+                        field: { onChange, onBlur, value },
+                        fieldState: { error },
+                      }) => (
+                        <>
+                          <TextInput
+                            style={[
+                              styles.input,
+                              styles.passwordInput,
+                              error && styles.inputError,
+                            ]}
+                            placeholder="Enter your password"
+                            placeholderTextColor="#999999"
+                            value={value}
+                            onChangeText={(text) => {
+                              onChange(text);
+                              setError(null);
+                            }}
+                            onBlur={onBlur}
+                            secureTextEntry={!showPassword}
+                            autoCapitalize="none"
+                            autoCorrect={false}
+                            editable={!isLoading}
+                          />
+                          {error && (
+                            <Text style={styles.errorText}>{error.message}</Text>
+                          )}
+                        </>
+                      )}
+                    />
+                    <TouchableOpacity
+                      style={styles.eyeButton}
+                      onPress={() => setShowPassword(!showPassword)}
+                    >
+                      <Text style={styles.eyeButtonText}>
+                        {showPassword ? "Hide" : "Show"}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {error && (
+                  <View style={styles.errorContainer}>
+                    <Text style={styles.errorMessage}>{error}</Text>
+                    {unverifiedEmail && (
+                      <TouchableOpacity
+                        style={styles.resendOtpContainer}
+                        onPress={handleResendOtp}
+                        disabled={isResendingOtp || isLoading}
+                        activeOpacity={0.7}
+                      >
+                        {isResendingOtp ? (
+                          <View style={styles.resendOtpLoading}>
+                            <ActivityIndicator size="small" color="#0066CC" />
+                            <Text style={styles.resendOtpText}>Sending...</Text>
+                          </View>
+                        ) : (
+                          <Text style={styles.resendOtpText}>
+                            Resend verification code
+                          </Text>
+                        )}
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                )}
+
+                <TouchableOpacity
+                  style={styles.forgotPasswordContainer}
+                  onPress={() => {
+                    router.push("/forgot-password" as any);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.buttonContainer}>
+                <TouchableOpacity
+                  style={[
+                    styles.signInButton,
+                    (isLoading) && styles.signInButtonDisabled,
+                  ]}
+                  onPress={handleSubmit(onSubmit)}
+                  disabled={isLoading}
+                  activeOpacity={0.8}
+                >
+                  {isLoading ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <Text style={styles.signInButtonText}>Sign In</Text>
+                  )}
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={{ marginTop: 16, alignItems: "center" }}
+                  onPress={() => {
+                    setShowEmailForm(false);
+                    setError(null);
+                  }}
+                >
+                  <Text style={styles.forgotPasswordText}>Back to options</Text>
+                </TouchableOpacity>
+
+                <View style={styles.signUpContainer}>
+                  <Text style={styles.signUpText}>Don’t have an account? </Text>
                   <TouchableOpacity
-                    style={styles.resendOtpContainer}
-                    onPress={handleResendOtp}
-                    disabled={isResendingOtp || isLoading}
+                    onPress={() => {
+                      router.push("/register" as any);
+                    }}
                     activeOpacity={0.7}
                   >
-                    {isResendingOtp ? (
-                      <View style={styles.resendOtpLoading}>
-                        <ActivityIndicator size="small" color="#0066CC" />
-                        <Text style={styles.resendOtpText}>Sending...</Text>
-                      </View>
-                    ) : (
-                      <Text style={styles.resendOtpText}>
-                        Resend verification code
-                      </Text>
-                    )}
+                    <Text style={styles.signUpLink}>Sign Up</Text>
                   </TouchableOpacity>
-                )}
+                </View>
               </View>
-            )}
-
-            {/* Forgot Password Link */}
-            <TouchableOpacity
-              style={styles.forgotPasswordContainer}
-              onPress={() => {
-                router.push("/forgot-password" as any);
-              }}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Sign In Button */}
-          <View style={styles.buttonContainer}>
-            <TouchableOpacity
-              style={[
-                styles.signInButton,
-                isLoading && styles.signInButtonDisabled,
-              ]}
-              onPress={handleSubmit(onSubmit)}
-              disabled={isLoading}
-              activeOpacity={0.8}
-            >
-              {isLoading ? (
-                <ActivityIndicator color="#FFFFFF" />
-              ) : (
-                <Text style={styles.signInButtonText}>Sign In</Text>
-              )}
-            </TouchableOpacity>
-
-            {/* Sign Up Link */}
-            <View style={styles.signUpContainer}>
-              <Text style={styles.signUpText}>Don't have an account? </Text>
-              <TouchableOpacity
-                onPress={() => {
-                  router.push("/register" as any);
-                }}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.signUpLink}>Sign Up</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
+            </>
+          )}
         </ScrollView>
       </KeyboardAvoidingView>
     </View>
@@ -593,6 +674,39 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontFamily: "Poppins_600SemiBold",
     letterSpacing: 0.5,
+  },
+  googleButton: {
+    backgroundColor: "#FFFFFF",
+    paddingVertical: 16,
+    paddingHorizontal: 32,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "#E0E0E0",
+    marginBottom: 4,
+  },
+  googleButtonText: {
+    color: "#333333",
+    fontSize: 16,
+    fontFamily: "Poppins_600SemiBold",
+    letterSpacing: 0.3,
+  },
+  orRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginVertical: 16,
+    gap: 12,
+  },
+  orLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: "#E0E0E0",
+  },
+  orText: {
+    fontSize: 13,
+    fontFamily: "Inter_400Regular",
+    color: "#999999",
   },
   forgotPasswordContainer: {
     marginTop: 16,

@@ -8,6 +8,9 @@ export default function TabsLayout() {
       screenOptions={{
         headerShown: false,
         tabBarShowLabel: false,
+        sceneStyle: {
+          backgroundColor: "#FFFFFF",
+        },
       }}
     >
       <Tabs.Screen name="dashboard" options={{ title: "Home" }} />

@@ -13,14 +13,16 @@ import {
   View,
 } from "react-native";
 import { Image } from "expo-image";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialIcons } from "@expo/vector-icons";
 import { PlaceMapPreview } from "../components/PlaceMapPreview";
 import { getCachedAgentData } from "../lib/cache/agentCache";
 import { parseGooglePlace } from "../lib/google-places/parseGooglePlace";
-import type { PlacesPrediction } from "../lib/google-places/types";
-import type { SelectedGooglePlace } from "../lib/google-places/types";
+import type {
+  PlacesPrediction,
+  SelectedGooglePlace,
+} from "../lib/google-places/types";
 import { usePlacesSearch } from "../lib/google-places/usePlacesSearch";
 import { saveAgentWorkingPlace } from "../lib/services/workingPlaceService";
 import { supabase } from "../lib/supabase";
@@ -28,6 +30,7 @@ import { scaleHeight } from "../lib/utils/responsive";
 
 export default function SetWorkingLocationScreen() {
   const router = useRouter();
+  const navigation = useNavigation();
   const { skipIntro: skipIntroParam } = useLocalSearchParams<{
     skipIntro?: string | string[];
   }>();
@@ -88,6 +91,11 @@ export default function SetWorkingLocationScreen() {
   }, [loadExisting]);
 
   const required = !hadPlace;
+
+  useEffect(() => {
+    navigation.setOptions({ gestureEnabled: !required });
+    return () => navigation.setOptions({ gestureEnabled: true });
+  }, [navigation, required]);
 
   useEffect(() => {
     if (!required) return;
@@ -174,7 +182,7 @@ export default function SetWorkingLocationScreen() {
               : "Set your working location"}
           </Text>
           <Text style={styles.introSub}>
-            Choose a landmark where you normally take jobs. We'll use it to find
+            Choose a landmark where you normally take jobs. We’ll use it to find
             nearby jobs and show you how far they are.
           </Text>
           <Text style={styles.introNote}>

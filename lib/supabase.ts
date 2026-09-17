@@ -62,7 +62,13 @@ export async function getFunctionsAuthHeaders(): Promise<
 
   let accessToken = session?.access_token;
 
-  if (!accessToken || (session?.expires_at && session.expires_at * 1000 < Date.now() + 30_000)) {
+  // refreshSession() throws AuthSessionMissingError when there is no session —
+  // never call it without a refresh token.
+  if (
+    session?.refresh_token &&
+    (!accessToken ||
+      (session.expires_at && session.expires_at * 1000 < Date.now() + 30_000))
+  ) {
     const { data: refreshed, error: refreshError } =
       await supabase.auth.refreshSession();
     if (refreshError || !refreshed.session?.access_token) {

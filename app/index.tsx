@@ -1,26 +1,92 @@
-import { Text, View, StyleSheet, TouchableOpacity, ScrollView } from "react-native";
-import { Image } from "expo-image";
-import { useRouter } from "expo-router";
+import { useCallback, useState } from "react";
 import {
-  scaleWidth,
-  scaleHeight,
-  scaleFont,
-  getResponsivePadding,
-} from "../lib/utils/responsive";
+  Text,
+  View,
+  StyleSheet,
+  TouchableOpacity,
+  ScrollView,
+} from "react-native";
+import { Image } from "expo-image";
+import { useFocusEffect } from "@react-navigation/native";
+import { useRouter } from "expo-router";
+import * as Linking from "expo-linking";
 import { AFFILIATION_DISCLAIMER } from "../constants/legal";
+import { getPostAuthHref } from "../lib/google-places/workingPlaceGate";
+import {
+  isGoogleOAuthBrowserOpen,
+  isGoogleOAuthNavigationOwned,
+  isGoogleOAuthRedirectUrl,
+  waitForSession,
+} from "../lib/auth/googleAuth";
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export default function WelcomeScreen() {
   const router = useRouter();
+  /** false = blank (never flash Get Started during Google / session restore) */
+  const [showWelcome, setShowWelcome] = useState(false);
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      setShowWelcome(false);
+
+      void (async () => {
+        // Stay blank while Google owns navigation — but never forever
+        const deadline = Date.now() + 8000;
+        while (
+          !cancelled &&
+          Date.now() < deadline &&
+          (isGoogleOAuthBrowserOpen() || isGoogleOAuthNavigationOwned())
+        ) {
+          const session = await waitForSession(600);
+          if (session?.user) {
+            const href = await getPostAuthHref(session.user.id);
+            if (!cancelled) router.replace(href as any);
+            return;
+          }
+          await sleep(100);
+        }
+
+        if (cancelled) return;
+
+        const url = (await Linking.getInitialURL()) ?? "";
+        if (!cancelled && url && isGoogleOAuthRedirectUrl(url)) {
+          router.replace("/google-auth" as any);
+          return;
+        }
+
+        const session = await waitForSession(1200);
+        if (cancelled) return;
+
+        if (session?.user) {
+          const href = await getPostAuthHref(session.user.id);
+          if (!cancelled) router.replace(href as any);
+          return;
+        }
+
+        if (!cancelled) setShowWelcome(true);
+      })();
+
+      return () => {
+        cancelled = true;
+      };
+    }, [router]),
+  );
 
   const handleGetStarted = () => {
-    // Navigate to registration form
-    router.push("/register" as any);
+    router.replace("/register" as any);
   };
 
   const handleSignIn = () => {
-    // Navigate to login screen
-    router.push("/login" as any);
+    router.replace("/login" as any);
   };
+
+  if (!showWelcome) {
+    return <View style={styles.blank} />;
+  }
 
   return (
     <View style={styles.container}>
@@ -28,7 +94,6 @@ export default function WelcomeScreen() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* Welcome Image Section */}
         <View style={styles.logoContainer}>
           <Image
             source={require("../assets/images/welcome-image.jpg")}
@@ -40,7 +105,6 @@ export default function WelcomeScreen() {
           />
         </View>
 
-        {/* Content Section */}
         <View style={styles.contentContainer}>
           <Text style={styles.subtitle}>
             Register customers for home internet services
@@ -55,7 +119,6 @@ export default function WelcomeScreen() {
         </View>
       </ScrollView>
 
-      {/* Button Section - Fixed at bottom */}
       <View style={styles.buttonContainer}>
         <TouchableOpacity
           style={styles.button}
@@ -78,6 +141,10 @@ export default function WelcomeScreen() {
 }
 
 const styles = StyleSheet.create({
+  blank: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+  },
   container: {
     flex: 1,
     backgroundColor: "#FFFFFF",
@@ -97,10 +164,6 @@ const styles = StyleSheet.create({
     width: "100%",
     minHeight: 250,
   },
-  logo: {
-    width: 120,
-    height: 120,
-  },
   welcomeImage: {
     width: "100%",
     height: 250,
@@ -111,13 +174,6 @@ const styles = StyleSheet.create({
     paddingTop: 0,
     paddingBottom: 40,
     width: "100%",
-  },
-  title: {
-    fontSize: 32,
-    fontWeight: "bold",
-    color: "#0066CC",
-    textAlign: "center",
-    marginBottom: 16,
   },
   subtitle: {
     fontSize: 20,

@@ -88,6 +88,7 @@ import {
 } from "../../lib/registrations/unifiedListRegistration";
 import { getPendingRegistrations, initOfflineStorage } from "../../lib/services/offlineStorage";
 import { isOnline, setupAutoSync } from "../../lib/services/syncService";
+import { markWorkingPlaceReady } from "../../lib/google-places/workingPlaceGate";
 import { supabase } from "../../lib/supabase";
 import {
     getCardPadding,
@@ -166,6 +167,7 @@ export default function DashboardScreen() {
   const [agentData, setAgentData] = useState<CachedAgentData | null>(null);
   const [greeting, setGreeting] = useState("Good morning,");
   const [unreadNotifications, setUnreadNotifications] = useState(0);
+  const initialLoadStartedRef = useRef(false);
   
   // Load unread notification count (excludes lead-offer rows — those use Leads tab)
   const loadUnreadNotificationCount = async (agentId: string) => {
@@ -373,7 +375,13 @@ export default function DashboardScreen() {
   useEffect(() => {
     setGreeting(getTimeBasedGreeting());
     initOfflineStorage();
-    loadUserData();
+
+    // loadUserData resolves cache + session itself. Guard only this call so
+    // React Strict Mode can recreate listeners without loading Home twice.
+    if (!initialLoadStartedRef.current) {
+      initialLoadStartedRef.current = true;
+      void loadUserData();
+    }
 
     const loadInitialNotificationCount = async () => {
       const { data: { user } } = await supabase.auth.getUser();
@@ -397,14 +405,15 @@ export default function DashboardScreen() {
     // Listen for auth state changes (logout, etc.)
     // Note: Navigation is handled by _layout.tsx to prevent duplicate navigations
     const { data: authListener } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
+      (event, session) => {
         if (event === "SIGNED_OUT" || !session) {
-          // Clear all caches on logout
-          // Navigation will be handled by _layout.tsx auth listener
-          await clearAgentDataCache();
-          await clearDashboardDataCache();
-          await clearNotificationsCache();
-          await clearRegistrationsCache();
+          // Never await Supabase-dependent work inside an auth callback.
+          void (async () => {
+            await clearAgentDataCache();
+            await clearDashboardDataCache();
+            await clearNotificationsCache();
+            await clearRegistrationsCache();
+          })();
         }
       }
     );
@@ -748,74 +757,27 @@ export default function DashboardScreen() {
       }
 
       if (!currentUser) {
-        // No user session after retries - check if we have cached data first
-        const cachedAgentData = resolvedAgent ?? (await getCachedAgentData());
-        if (cachedAgentData) {
-          // We have cached data but no session - might be a temporary issue
-          // Try to refresh the session one more time
-          try {
-            const { data: refreshSession, error: refreshError } = await supabase.auth.refreshSession();
-            if (refreshSession?.session?.user) {
-              // Session restored - use the refreshed session
-              currentUser = refreshSession.session.user;
-              session = refreshSession.session;
-            } else if (refreshError) {
-              // Refresh failed - check if it's a network error or actual logout
-              console.error("Session refresh failed:", refreshError);
-              // If it's a network error, we can still use cached data
-              // Only logout if it's an auth error (token expired, invalid, etc.)
-              if (refreshError.message?.includes("Invalid") || 
-                  refreshError.message?.includes("expired") ||
-                  refreshError.message?.includes("JWT")) {
-                // Token is invalid - clear cache and redirect to login
-                await clearAgentDataCache();
-                await clearDashboardDataCache();
-                router.replace("/login" as any);
-                return;
-              }
-              // Network error - continue with cached data (offline mode)
-              // We'll use a minimal user object from cache
-              currentUser = { id: cachedAgentData.id, email: cachedAgentData.email } as any;
-              if (!resolvedAgent) {
-                resolvedAgent = cachedAgentData;
-                setAgentData(cachedAgentData);
-                agentStatusForPrompt = cachedAgentData.status ?? null;
-              }
-            } else {
-              // No session and refresh returned nothing - clear cache and redirect
-              await clearAgentDataCache();
-              await clearDashboardDataCache();
-              router.replace("/login" as any);
-              return;
-            }
-          } catch (refreshError: any) {
-            // Refresh threw an error - if it's a network error, continue with cache
-            console.error("Session refresh error:", refreshError);
-            if (refreshError.message?.includes("network") || 
-                refreshError.message?.includes("timeout") ||
-                refreshError.message?.includes("Failed to fetch")) {
-              // Network error - continue with cached data
-              currentUser = { id: cachedAgentData.id, email: cachedAgentData.email } as any;
-              if (!resolvedAgent) {
-                resolvedAgent = cachedAgentData;
-                setAgentData(cachedAgentData);
-                agentStatusForPrompt = cachedAgentData.status ?? null;
-              }
-            } else {
-              // Auth error - clear cache and redirect to login
-              await clearAgentDataCache();
-              await clearDashboardDataCache();
-              router.replace("/login" as any);
-              return;
-            }
-          }
-        } else {
-          // No cached data and no session - definitely logged out
+        // No session — never call refreshSession() (throws AuthSessionMissingError).
+        // Give OAuth/storage one more beat, then require a real session.
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        const lateResult = await supabase.auth.getSession();
+        session = lateResult.data?.session;
+        currentUser = session?.user;
+        if (!currentUser) {
           await clearAgentDataCache();
           await clearDashboardDataCache();
           router.replace("/login" as any);
           return;
         }
+      }
+
+      // Drop stale cache from a different account (common after Google switch)
+      if (resolvedAgent && resolvedAgent.id !== currentUser.id) {
+        resolvedAgent = null;
+        setAgentData(null);
+        agentStatusForPrompt = null;
+        await clearAgentDataCache();
+        await clearDashboardDataCache();
       }
 
       // Check if email is verified (only if we have a real session)
@@ -847,7 +809,7 @@ export default function DashboardScreen() {
         console.log("📴 Offline - loading from cache");
         if (!resolvedAgent) {
           const cachedAgentData = await getCachedAgentData();
-          if (cachedAgentData) {
+          if (cachedAgentData?.id === currentUser.id) {
             resolvedAgent = cachedAgentData;
             setAgentData(cachedAgentData);
             agentStatusForPrompt = cachedAgentData.status ?? null;
@@ -862,14 +824,27 @@ export default function DashboardScreen() {
         .from("agents")
         .select("*")
         .eq("id", currentUser.id)
-        .single();
+        .maybeSingle();
 
-      if (agentError) {
+      if (agentError || !agent) {
+        // Google signup / incomplete profile — no agents row yet
+        if (
+          !agentError ||
+          agentError.code === "PGRST116" ||
+          agentError.details?.includes?.("0 rows") ||
+          agentError.message?.includes?.("0 rows")
+        ) {
+          await clearAgentDataCache();
+          await clearDashboardDataCache();
+          markWorkingPlaceReady(false);
+          router.replace("/complete-profile" as any);
+          return;
+        }
         console.error("Error loading agent data:", agentError);
         // Prefer any cached agent so home tiles still render
         if (!resolvedAgent) {
           const cachedAgentData = await getCachedAgentData();
-          if (cachedAgentData) {
+          if (cachedAgentData?.id === currentUser.id) {
             resolvedAgent = cachedAgentData;
             setAgentData(cachedAgentData);
             agentStatusForPrompt = cachedAgentData.status ?? null;

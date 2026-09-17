@@ -20,7 +20,6 @@ import {
 } from "../lib/utils/responsive";
 import type { LeadOffer, LeadOfferPreview } from "../lib/dispatch/types";
 import { humanizePackageLabel } from "../lib/notifications/leadOfferCopy";
-import { resolveLeadInstallDisplayKes } from "../lib/commissions/leadInstallCommission";
 import {
   acceptLeadOffer,
   declineLeadOffer,
@@ -32,7 +31,6 @@ import {
   parseGooglePlace,
   pinDistanceKm,
 } from "../lib/google-places/parseGooglePlace";
-import { fetchDispatchConfig } from "../lib/services/leadDispatchService";
 
 function offerDistanceLabel(km: number): string {
   const n = Number(km);
@@ -299,7 +297,6 @@ export function LeadOfferModal({
   const [loading, setLoading] = useState<"accept" | "decline" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [agentWorkingPlace, setAgentWorkingPlace] = useState<unknown>(null);
-  const [earnKes, setEarnKes] = useState<number | null>(null);
   const expiredHandledRef = useRef(false);
   const slideAnim = useRef(new Animated.Value(40)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -310,35 +307,7 @@ export function LeadOfferModal({
   const isReminder = Boolean(preview.isCallbackReminder);
   const brandColor = isReminder ? "#3949AB" : isSafaricom ? SAFARICOM : AIRTEL;
   const brandLabel = isSafaricom ? "Safaricom" : "Airtel";
-  const swipeLabel =
-    earnKes != null && earnKes > 0
-      ? `Swipe · pocket KSh ${earnKes.toLocaleString()}`
-      : "Swipe to accept";
-
-  useEffect(() => {
-    let cancelled = false;
-    setEarnKes(
-      resolveLeadInstallDisplayKes({
-        source: preview.source,
-        preferredPackage: preview.preferredPackage ?? preview.packageLabel,
-        receiverFees: { standard: 0, premium: 0 },
-      }),
-    );
-    void (async () => {
-      const cfg = await fetchDispatchConfig();
-      if (cancelled) return;
-      setEarnKes(
-        resolveLeadInstallDisplayKes({
-          source: preview.source,
-          preferredPackage: preview.preferredPackage ?? preview.packageLabel,
-          receiverFees: cfg.receiverFees,
-        }),
-      );
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [offer?.id, preview.source, preview.preferredPackage, preview.packageLabel]);
+  const swipeLabel = "Swipe to accept";
 
   useEffect(() => {
     void getCachedAgentData().then((cached) => {
@@ -528,29 +497,6 @@ export function LeadOfferModal({
               : "Accept to unlock name, phone & full address"}
           </Text>
 
-          {earnKes != null && earnKes > 0 ? (
-            <View style={styles.earnBanner}>
-              <View style={styles.earnShine} />
-              <View style={styles.earnLeft}>
-                <Text style={styles.earnEyebrow}>Yours on install</Text>
-                <View style={styles.earnAmountRow}>
-                  <Text style={styles.earnCurrency}>KSh</Text>
-                  <Text style={styles.earnAmount}>
-                    {earnKes.toLocaleString()}
-                  </Text>
-                </View>
-              </View>
-              <View style={styles.earnBadge}>
-                <MaterialIcons
-                  name="trending-up"
-                  size={scaleWidth(16)}
-                  color="#92400E"
-                />
-                <Text style={styles.earnBadgeText}>Earn</Text>
-              </View>
-            </View>
-          ) : null}
-
           <View style={styles.details}>
             {preview.packageLabel ? (
               <DetailRow
@@ -707,66 +653,6 @@ const styles = StyleSheet.create({
     color: MUTED,
     lineHeight: scaleFont(18),
     marginBottom: scaleHeight(14),
-  },
-  earnBanner: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#FFF7ED",
-    borderRadius: scaleWidth(16),
-    paddingVertical: scaleHeight(14),
-    paddingHorizontal: scaleWidth(16),
-    marginBottom: scaleHeight(16),
-    overflow: "hidden",
-    borderWidth: 1,
-    borderColor: "#FDBA74",
-  },
-  earnShine: {
-    position: "absolute",
-    top: -scaleHeight(20),
-    right: -scaleWidth(10),
-    width: scaleWidth(100),
-    height: scaleWidth(100),
-    borderRadius: scaleWidth(50),
-    backgroundColor: "rgba(251, 191, 36, 0.22)",
-  },
-  earnLeft: {
-    flex: 1,
-  },
-  earnEyebrow: {
-    fontFamily: "Inter_600SemiBold",
-    fontSize: scaleFont(12),
-    color: "#B45309",
-    marginBottom: scaleHeight(2),
-  },
-  earnAmountRow: {
-    flexDirection: "row",
-    alignItems: "baseline",
-    gap: scaleWidth(6),
-  },
-  earnCurrency: {
-    fontFamily: "Poppins_600SemiBold",
-    fontSize: scaleFont(16),
-    color: "#92400E",
-  },
-  earnAmount: {
-    fontFamily: "Poppins_700Bold",
-    fontSize: scaleFont(32),
-    color: "#78350F",
-    lineHeight: scaleFont(38),
-  },
-  earnBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: scaleWidth(4),
-    backgroundColor: "#FDE68A",
-    paddingHorizontal: scaleWidth(10),
-    paddingVertical: scaleHeight(6),
-    borderRadius: scaleWidth(10),
-  },
-  earnBadgeText: {
-    fontFamily: "Poppins_700Bold",
-    fontSize: scaleFont(13),
-    color: "#92400E",
   },
   details: {
     borderTopWidth: StyleSheet.hairlineWidth,

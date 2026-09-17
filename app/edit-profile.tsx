@@ -30,6 +30,10 @@ import {
   scaleHeight,
   scaleWidth,
 } from "../lib/utils/responsive";
+import {
+  checkAgentPhonesTaken,
+  phoneTakenUserMessage,
+} from "../lib/auth/agentPhoneCheck";
 
 export default function EditProfileScreen() {
   const router = useRouter();
@@ -97,6 +101,16 @@ export default function EditProfileScreen() {
     if (!agentId) return;
     setSaving(true);
     try {
+      const taken = await checkAgentPhonesTaken({
+        airtelPhone: data.airtelPhone,
+        safaricomPhone: data.safaricomPhone,
+        excludeAgentId: agentId,
+      });
+      if (taken.taken) {
+        Alert.alert("Phone already registered", phoneTakenUserMessage());
+        return;
+      }
+
       const { data: updated, error } = await supabase
         .from("agents")
         .update({

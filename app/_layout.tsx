@@ -1,6 +1,6 @@
 import * as Linking from "expo-linking";
 import { Stack, useRouter, useSegments, usePathname } from "expo-router";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { AppState, StatusBar } from "react-native";
 import { useFonts } from "expo-font";
 import * as SplashScreen from "expo-splash-screen";
@@ -35,9 +35,19 @@ import {
 import {
   getPostAuthHref,
   isAuthOpenRoute,
+  isCompleteProfileRoute,
   isSetWorkingLocationRoute,
-  isWorkingPlaceReady,
 } from "../lib/google-places/workingPlaceGate";
+import {
+  clearGoogleOAuthNavigationOwned,
+  createSessionFromUrl,
+  isGoogleOAuthBrowserOpen,
+  isGoogleOAuthNavigationOwned,
+  isGoogleOAuthRedirectUrl,
+  resolveGooglePostAuthHref,
+  waitForSession,
+} from "../lib/auth/googleAuth";
+import { resetTo } from "../lib/auth/resetTo";
 import {
   acceptLeadOffer,
   declineLeadOffer,
@@ -52,9 +62,6 @@ import * as Notifications from "expo-notifications";
 // Move ref outside component to persist across remounts (React Strict Mode)
 const pushNotificationsSetupRef = { current: false };
 const isSettingUpPushNotifications = { current: false };
-const layoutEffectHasRun = { current: false };
-const sessionCheckCompleted = { current: false };
-const initializationCompleted = { current: false };
 const isAppBlockedRef = { current: false }; // Track if app is blocked for update
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
@@ -72,89 +79,83 @@ export default function RootLayout() {
 
   useEffect(() => {
     let isMounted = true;
-    let sessionChecked = false;
-    
-    // Track if this is the first run
-    const isFirstRun = !layoutEffectHasRun.current;
-    if (isFirstRun) {
-      layoutEffectHasRun.current = true;
-      console.log("🚀 Layout effect running (first time)");
-    } else {
-      console.log("⏭️ Layout effect running (remount - React Strict Mode)");
-    }
+    console.log("🚀 Layout auth setup");
 
-    // On remounts, just ensure initialization is complete and skip session check
-    if (!isFirstRun) {
-      console.log("⏭️ Remount detected - skipping session check, ensuring initialization complete");
-      if (isMounted && !initializationCompleted.current) {
-        setIsInitializing(false);
-        initializationCompleted.current = true;
+    const replaceIfDifferent = (href: string) => {
+      // React Strict Mode cleans up the first effect run while its async
+      // session/profile lookup may still be resolving. That stale run must
+      // never perform a second navigation.
+      if (!isMounted) return;
+      const normalize = (value: string) =>
+        (`/${value}`.replace(/\/+/g, "/").replace(/\/$/, "") || "/")
+          .replace(/^\/\(tabs\)/, "");
+      if (normalize(pathname) !== normalize(href)) {
+        resetTo(router, href);
       }
-      return () => {
-        isMounted = false;
-      };
-    }
+    };
 
     const finishInitializing = () => {
-      if (isMounted && !isAppBlockedRef.current && !initializationCompleted.current) {
+      if (isMounted && !isAppBlockedRef.current) {
         setIsInitializing(false);
-        initializationCompleted.current = true;
       }
     };
 
     const checkSessionOnce = async (): Promise<void> => {
-      if (sessionCheckCompleted.current) {
-        finishInitializing();
-        return;
-      }
       if (isBlocked || isAppBlockedRef.current) {
         return;
       }
 
       try {
-        const {
-          data: { session },
-          error,
-        } = await supabase.auth.getSession();
-        sessionChecked = true;
-
-        if (isBlocked || isAppBlockedRef.current) {
-          return;
-        }
-
-        if (error) {
-          console.error("Error getting session:", error);
-          sessionCheckCompleted.current = true;
+        // The callback screen is the sole owner of Google OAuth completion.
+        // Root bootstrap must not route an old/still-persisting session away
+        // before the callback code/tokens have been exchanged.
+        if (
+          pathname.includes("google-auth") ||
+          pathname.includes("auth/callback")
+        ) {
           finishInitializing();
           return;
         }
 
-        if (session?.user && isMounted && !isBlocked && !isAppBlockedRef.current) {
-          console.log("✅ Session found - redirecting to dashboard");
-          sessionCheckCompleted.current = true;
+        const session = await waitForSession(1200);
+
+        if (!isMounted || isBlocked || isAppBlockedRef.current) {
+          return;
+        }
+
+        if (session?.user && !isBlocked && !isAppBlockedRef.current) {
+          console.log("✅ Session found — resolving post-auth route");
           try {
-            await handleAuthChange(session);
+            if (!session.user.email_confirmed_at) {
+              replaceIfDifferent("/verify-email");
+            } else {
+              const href = await getPostAuthHref(session.user.id);
+              if (!isMounted) return;
+              replaceIfDifferent(href);
+            }
           } catch (authError) {
-            console.error("Error in handleAuthChange:", authError);
+            console.error("Error resolving post-auth route:", authError);
+            try {
+              replaceIfDifferent("/complete-profile");
+            } catch {
+              /* ignore */
+            }
           }
+          await new Promise((r) => setTimeout(r, 80));
           finishInitializing();
           return;
         }
 
-        sessionCheckCompleted.current = true;
         finishInitializing();
       } catch (error) {
         console.error("Error in checkSessionOnce:", error);
-        sessionChecked = true;
-        sessionCheckCompleted.current = true;
         finishInitializing();
       }
     };
 
     const maxLoadTimer = setTimeout(() => {
-      if (isMounted && !initializationCompleted.current && !isBlocked) {
+      if (isMounted && !isBlocked) {
         console.warn("Auth bootstrap timeout — showing app");
-        sessionCheckCompleted.current = true;
         finishInitializing();
       }
     }, 5000);
@@ -169,9 +170,7 @@ export default function RootLayout() {
           setNeedsUpdate(true);
           setIsBlocked(true);
           isAppBlockedRef.current = true;
-          sessionCheckCompleted.current = true;
           setIsInitializing(false);
-          initializationCompleted.current = true;
           router.replace("/update-required" as any);
           return;
         }
@@ -188,7 +187,7 @@ export default function RootLayout() {
     // Listen for auth state changes
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
       // Don't handle auth changes if app is blocked
       if (isBlocked || isAppBlockedRef.current) {
         console.log("🚫 App is blocked - ignoring auth state change");
@@ -196,6 +195,10 @@ export default function RootLayout() {
       }
 
       if (event === "SIGNED_OUT") {
+        if (isGoogleOAuthNavigationOwned() || isGoogleOAuthBrowserOpen()) {
+          console.log("Ignoring SIGNED_OUT during Google OAuth");
+          return;
+        }
         console.log("User signed out - redirecting to login");
         unsubscribeFromNotificationAlerts();
         void (async () => {
@@ -231,31 +234,22 @@ export default function RootLayout() {
 
     // Setup push notifications (will run even if user not logged in yet)
     // Only setup once to prevent infinite loops - skip on remounts
-    if (isFirstRun) {
-      // Use both ref and flag to prevent concurrent calls
-      if (!pushNotificationsSetupRef.current && !isSettingUpPushNotifications.current) {
-        console.log("🚀 Calling setupPushNotifications...");
-        pushNotificationsSetupRef.current = true;
-        isSettingUpPushNotifications.current = true;
-        setupPushNotifications()
-          .then(() => {
-            console.log("✅ setupPushNotifications completed");
-            isSettingUpPushNotifications.current = false;
-          })
-          .catch((error) => {
-            console.error("❌ Error setting up push notifications on mount:", error);
-            console.error("Error details:", JSON.stringify(error, null, 2));
-            pushNotificationsSetupRef.current = false; // Reset on error so we can retry
-            isSettingUpPushNotifications.current = false;
-          });
-      } else if (isSettingUpPushNotifications.current) {
-        console.log("⏳ setupPushNotifications already in progress, skipping...");
-      } else if (pushNotificationsSetupRef.current) {
-        console.log("✅ setupPushNotifications already completed, skipping...");
-      }
-    } else {
-      // On remount, skip push notifications setup but still allow initialization to complete
-      console.log("⏭️ Skipping push notifications setup on remount");
+    // Use both ref and flag to prevent concurrent setup during Strict Mode.
+    if (!pushNotificationsSetupRef.current && !isSettingUpPushNotifications.current) {
+      console.log("🚀 Calling setupPushNotifications...");
+      pushNotificationsSetupRef.current = true;
+      isSettingUpPushNotifications.current = true;
+      setupPushNotifications()
+        .then(() => {
+          console.log("✅ setupPushNotifications completed");
+          isSettingUpPushNotifications.current = false;
+        })
+        .catch((error) => {
+          console.error("❌ Error setting up push notifications on mount:", error);
+          console.error("Error details:", JSON.stringify(error, null, 2));
+          pushNotificationsSetupRef.current = false;
+          isSettingUpPushNotifications.current = false;
+        });
     }
 
     // Check if app was opened via deep link (non-blocking)
@@ -305,6 +299,11 @@ export default function RootLayout() {
 
   useEffect(() => {
     if (isInitializing || isBlocked) return;
+    if (isGoogleOAuthNavigationOwned()) return;
+    if (isCompleteProfileRoute(pathname, segments)) return;
+    if (pathname.includes("auth/callback") || pathname.includes("google-auth")) {
+      return;
+    }
     if (
       isAuthOpenRoute(pathname, segments) &&
       !isSetWorkingLocationRoute(pathname, segments)
@@ -318,14 +317,15 @@ export default function RootLayout() {
         data: { session },
       } = await supabase.auth.getSession();
       if (!session?.user?.email_confirmed_at) return;
+      const href = await getPostAuthHref(session.user.id);
+      if (cancelled || isGoogleOAuthNavigationOwned()) return;
       if (
-        isWorkingPlaceReady() &&
-        !isSetWorkingLocationRoute(pathname, segments)
+        href === "/complete-profile" &&
+        !isCompleteProfileRoute(pathname, segments)
       ) {
+        router.replace("/complete-profile" as any);
         return;
       }
-      const href = await getPostAuthHref(session.user.id);
-      if (cancelled) return;
       if (
         href === "/set-working-location" &&
         !isSetWorkingLocationRoute(pathname, segments)
@@ -344,106 +344,6 @@ export default function RootLayout() {
       SplashScreen.hideAsync().catch(() => {});
     }
   }, [fontsLoaded, isInitializing]);
-
-  const checkSession = async (): Promise<void> => {
-    try {
-      // Very quick session check with aggressive timeout
-      const sessionPromise = supabase.auth.getSession();
-      const timeoutPromise = new Promise<{
-        data: { session: null };
-        error: null;
-      }>(
-        (resolve) =>
-          setTimeout(() => {
-            console.log("Session check timed out - continuing");
-            resolve({ data: { session: null }, error: null });
-          }, 800) // 800ms max - shorter than max load timer
-      );
-
-      const result = await Promise.race([sessionPromise, timeoutPromise]);
-      const session = (result as any)?.data?.session;
-
-      // If we have a valid session, try to redirect immediately
-      if (session?.user) {
-        // Redirect immediately - handleAuthChange will navigate to dashboard
-        handleAuthChange(session).catch((error) => {
-          console.error("Error in handleAuthChange:", error);
-          // Ignore errors - individual screens will handle their own auth checks
-        });
-      }
-      // If no session, just return - welcome screen will show naturally
-    } catch (error) {
-      console.error("Error checking session:", error);
-      // Return normally - loading state will be cleared by timeout
-    }
-  };
-
-  const handleAuthChange = async (session: any) => {
-    if (!session?.user) {
-      return;
-    }
-
-    // Don't navigate if app is blocked (update required)
-    if (isBlocked) {
-      console.log("🚫 App is blocked - preventing navigation from handleAuthChange");
-      return;
-    }
-
-    // Have session - check verification and approval status and redirect
-    try {
-      // Check if email is verified (from session, no need to fetch user again)
-      if (!session.user.email_confirmed_at) {
-        router.replace("/verify-email" as any);
-        return;
-      }
-
-      // Email verified - check agent approval status with timeout
-      try {
-        const agentPromise = supabase
-          .from("agents")
-          .select("status")
-          .eq("id", session.user.id)
-          .single();
-
-        const agentTimeoutPromise = new Promise((resolve) =>
-          setTimeout(
-            () => resolve({ data: null, error: { message: "Timeout" } }),
-            2000
-          )
-        );
-
-        const { data: agentData, error: agentError } = (await Promise.race([
-          agentPromise,
-          agentTimeoutPromise,
-        ])) as any;
-
-        // Check again if blocked before navigating
-        if (isBlocked || isAppBlockedRef.current) {
-          console.log("🚫 App is blocked - preventing dashboard navigation");
-          return;
-        }
-
-        if (agentError || !agentData) {
-          // Agent record doesn't exist or query timed out - redirect to dashboard (will show pending status)
-          router.replace("/dashboard" as any);
-          return;
-        }
-
-        const href = await getPostAuthHref(session.user.id);
-        router.replace(href as any);
-      } catch (agentError) {
-        console.error("Error checking agent status:", agentError);
-        // On error, redirect to dashboard (will show pending status) - but only if not blocked
-        if (!isBlocked && !isAppBlockedRef.current) {
-          router.replace("/dashboard" as any);
-        }
-      }
-    } catch (error) {
-      console.error("Error handling auth change:", error);
-      // On any error, just let user stay where they are or go to welcome
-      // Individual screens will handle auth checks
-    }
-  };
 
   const setupPushNotifications = async () => {
     try {
@@ -504,12 +404,27 @@ export default function RootLayout() {
     }
 
     const notification = response.notification;
+    const requestIdentifier = notification.request?.identifier;
     const data = notification.request?.content?.data as
       | Record<string, unknown>
       | undefined;
     const actionId = response.actionIdentifier;
 
     console.log("🔔 Handling notification tap:", data, actionId);
+
+    // Android can surface the Chrome/Google OAuth return intent through Expo's
+    // notification response API. It has no Expo notification identifier/type
+    // and must never be allowed to navigate to Home.
+    if (
+      !requestIdentifier ||
+      !data ||
+      (typeof data.type !== "string" &&
+        typeof data.actionUrl !== "string" &&
+        typeof data.relatedId !== "string")
+    ) {
+      console.log("⚠️ Non-app notification intent, skipping navigation");
+      return;
+    }
 
     if (data?.type === "LEAD_OFFER") {
       const offerId = extractOfferIdFromPushData(data);
@@ -561,14 +476,6 @@ export default function RootLayout() {
       }
     }
 
-    const currentRoute = segments[segments.length - 1];
-    
-    // Only navigate if we have valid notification data
-    if (!data) {
-      console.log("⚠️ No notification data, skipping navigation");
-      return;
-    }
-
     const metadata =
       data.metadata && typeof data.metadata === "object"
         ? (data.metadata as Record<string, unknown>)
@@ -612,11 +519,8 @@ export default function RootLayout() {
         carrier: typeof data.carrier === "string" ? data.carrier : null,
       });
     } else {
-      // No type specified - go to dashboard instead of notifications
-      console.log("⚠️ No notification type, navigating to dashboard");
-      if (currentRoute !== "dashboard") {
-        router.push("/dashboard" as any);
-      }
+      // Unknown notification payloads are not navigation commands.
+      console.log("⚠️ No supported notification action, skipping navigation");
     }
   };
 
@@ -624,6 +528,31 @@ export default function RootLayout() {
     try {
       const urlString = event.url;
       console.log("Handling deep link:", urlString);
+
+      if (isGoogleOAuthRedirectUrl(urlString)) {
+        // Always consume returned credentials first. The google-auth screen
+        // remains the sole navigation owner for in-app OAuth.
+        const ownedBeforeCallback =
+          isGoogleOAuthBrowserOpen() || isGoogleOAuthNavigationOwned();
+        const { error } = await createSessionFromUrl(urlString);
+        const session = await waitForSession(2000);
+        if (ownedBeforeCallback) {
+          return;
+        }
+        clearGoogleOAuthNavigationOwned();
+        if (error && !session?.user) {
+          router.replace({
+            pathname: "/login",
+            params: { error },
+          } as any);
+          return;
+        }
+        if (session?.user) {
+          const href = await resolveGooglePostAuthHref(session.user.id);
+          router.replace(href as any);
+        }
+        return;
+      }
 
       // Extract tokens directly from URL string (works with hash fragments and query params)
       // Supabase password reset links format: wamapps://reset-password#access_token=xxx&refresh_token=yyy&type=recovery
@@ -723,6 +652,9 @@ export default function RootLayout() {
       <Stack
         screenOptions={{
           headerShown: false,
+          contentStyle: {
+            backgroundColor: "#FFFFFF",
+          },
         }}
       />
       <LeadDispatchManager />

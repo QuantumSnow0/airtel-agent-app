@@ -57,6 +57,10 @@ import {
   getDeviceToken,
   unregisterDeviceToken,
 } from "../../lib/services/pushNotificationService";
+import {
+  hasGoogleIdentity,
+  linkGoogleIdentity,
+} from "../../lib/auth/googleAuth";
 
 // Helper function to get first letter of name
 const getInitial = (name?: string, email?: string): string => {
@@ -148,6 +152,8 @@ export default function ProfileScreen() {
   const [leadsAvailable, setLeadsAvailable] = useState(false);
   const [canReceiveLeads, setCanReceiveLeads] = useState(false);
   const [togglingLeads, setTogglingLeads] = useState(false);
+  const [googleLinked, setGoogleLinked] = useState(false);
+  const [linkingGoogle, setLinkingGoogle] = useState(false);
   const pendingEnableLeadsRef = useRef(false);
 
   useEffect(() => {
@@ -191,6 +197,7 @@ export default function ProfileScreen() {
       }
 
       setUser(currentUser);
+      setGoogleLinked(hasGoogleIdentity(currentUser.identities));
 
       // If offline, load from cache
       if (!online) {
@@ -681,6 +688,61 @@ export default function ProfileScreen() {
               <Text style={styles.infoValue}>
                 {agentData?.safaricom_phone || "Not provided"}
               </Text>
+            </View>
+          </View>
+        </View>
+
+        <View style={styles.infoSection}>
+          <Text style={styles.sectionTitle}>Sign-in</Text>
+          <View style={styles.infoCard}>
+            <View style={styles.infoRow}>
+              <View style={{ flex: 1, paddingRight: scaleWidth(12) }}>
+                <Text style={styles.infoLabel}>Google</Text>
+                <Text style={styles.leadsToggleHint}>
+                  {googleLinked
+                    ? "Connected — you can sign in with Google"
+                    : "Connect Google to this account (use the same email)"}
+                </Text>
+              </View>
+              {googleLinked ? (
+                <Text style={[styles.infoValue, { color: "#2E7D32" }]}>
+                  Connected
+                </Text>
+              ) : (
+                <TouchableOpacity
+                  disabled={linkingGoogle || isOffline}
+                  onPress={async () => {
+                    setLinkingGoogle(true);
+                    try {
+                      const { error } = await linkGoogleIdentity();
+                      if (error) {
+                        Alert.alert("Could not connect Google", error);
+                        return;
+                      }
+                      const {
+                        data: { user: refreshed },
+                      } = await supabase.auth.getUser();
+                      setGoogleLinked(
+                        hasGoogleIdentity(refreshed?.identities),
+                      );
+                      if (hasGoogleIdentity(refreshed?.identities)) {
+                        Alert.alert(
+                          "Google connected",
+                          "You can sign in with Google next time.",
+                        );
+                      }
+                    } finally {
+                      setLinkingGoogle(false);
+                    }
+                  }}
+                >
+                  {linkingGoogle ? (
+                    <ActivityIndicator size="small" color="#0066CC" />
+                  ) : (
+                    <Text style={styles.editLink}>Connect</Text>
+                  )}
+                </TouchableOpacity>
+              )}
             </View>
           </View>
         </View>
