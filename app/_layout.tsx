@@ -25,6 +25,8 @@ import {
   unsubscribeFromNotificationAlerts,
 } from "../lib/services/pushNotificationService";
 import { supabase } from "../lib/supabase";
+import { ServiceUnavailableScreen } from "../components/ServiceUnavailableScreen";
+import { APP_FORCE_UNAVAILABLE } from "../lib/config/appAvailability";
 import { LeadDispatchManager } from "../components/LeadDispatchManager";
 import { NotificationDetailHost } from "../components/NotificationDetailModal";
 import {
@@ -66,7 +68,7 @@ const isAppBlockedRef = { current: false }; // Track if app is blocked for updat
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
-export default function RootLayout() {
+function RootLayout() {
   const [fontsLoaded] = useFonts(APP_FONTS);
   const [isInitializing, setIsInitializing] = useState(true);
   const [needsUpdate, setNeedsUpdate] = useState(false);
@@ -661,4 +663,11 @@ export default function RootLayout() {
       <NotificationDetailHost />
     </>
   );
+}
+
+export default function RootEntry() {
+  if (APP_FORCE_UNAVAILABLE) {
+    return <ServiceUnavailableScreen />;
+  }
+  return <RootLayout />;
 }
